@@ -1,0 +1,412 @@
+---
+title: Custom criteria configurations
+description: Examples of different criteria configurations for various use cases and how to fine-tune your tweet audit
+---
+
+The `config.json` file controls which tweets get flagged for deletion. This guide shows practical examples for different scenarios.
+
+## Criteria structure
+
+Every `config.json` follows this structure:
+
+```json
+{
+  "criteria": {
+    "forbidden_words": [],
+    "topics_to_exclude": [],
+    "tone_requirements": [],
+    "additional_instructions": ""
+  }
+}
+```
+
+### Criteria fields explained
+
+<AccordionGroup>
+  <Accordion title="forbidden_words - Exact word matching">
+    Case-insensitive word list. Flags any tweet containing these exact words.
+    
+    ```json
+    "forbidden_words": ["crypto", "NFT", "damn"]
+    ```
+    
+    - Flags: "Crypto is the future!" ✓
+    - Flags: "I'm damn tired" ✓
+    - Keeps: "Cryptocurrency adoption" ✗ (different word)
+  </Accordion>
+  
+  <Accordion title="topics_to_exclude - Content categories">
+    High-level themes and topics. The AI interprets these broadly.
+    
+    ```json
+    "topics_to_exclude": [
+      "Political opinions",
+      "Cryptocurrency hype"
+    ]
+    ```
+    
+    The AI uses semantic understanding to catch variations.
+  </Accordion>
+  
+  <Accordion title="tone_requirements - Style and manner">
+    Rules about how content should be expressed.
+    
+    ```json
+    "tone_requirements": [
+      "Professional language",
+      "No sarcasm"
+    ]
+    ```
+    
+    Focuses on delivery rather than topic.
+  </Accordion>
+  
+  <Accordion title="additional_instructions - Free-form guidance">
+    Natural language instructions for the AI.
+    
+    ```json
+    "additional_instructions": "Be extra cautious with tweets from 2020-2021"
+    ```
+    
+    Use this for nuanced, context-specific rules.
+  </Accordion>
+</AccordionGroup>
+
+## Example configurations
+
+### Conservative professional cleanup
+
+For professionals who want to remove only obviously problematic content:
+
+```json config.json
+{
+  "criteria": {
+    "forbidden_words": [
+      "damn",
+      "wtf",
+      "shit",
+      "fuck"
+    ],
+    "topics_to_exclude": [
+      "Explicit profanity",
+      "Personal attacks or insults",
+      "Discriminatory language"
+    ],
+    "tone_requirements": [
+      "No aggressive or hostile language"
+    ],
+    "additional_instructions": "Only flag content that is clearly unprofessional or offensive"
+  }
+}
+```
+
+<Tip>
+**Use case**: Job seekers who want to clean up obvious red flags without removing personality.
+</Tip>
+
+### Aggressive career rebrand
+
+For users completely rebranding their professional image:
+
+```json config.json
+{
+  "criteria": {
+    "forbidden_words": [
+      "crypto",
+      "NFT",
+      "web3",
+      "blockchain",
+      "metaverse",
+      "moon",
+      "HODL",
+      "gm",
+      "wagmi"
+    ],
+    "topics_to_exclude": [
+      "Cryptocurrency or blockchain",
+      "NFT or digital art speculation",
+      "Get-rich-quick schemes",
+      "Financial advice or predictions",
+      "Hype or promotional content",
+      "Casual or unprofessional tone",
+      "Personal life updates"
+    ],
+    "tone_requirements": [
+      "Strictly professional language",
+      "Informative and educational only",
+      "No excitement or hype",
+      "No slang or internet speak"
+    ],
+    "additional_instructions": "Flag anything related to crypto, NFTs, or Web3. Also flag casual tweets, jokes, or personal updates. Keep only educational, professional content."
+  }
+}
+```
+
+<Tip>
+**Use case**: Former crypto influencer transitioning to traditional finance or enterprise software.
+</Tip>
+
+### Academic researcher
+
+For academics wanting to maintain scholarly credibility:
+
+```json config.json
+{
+  "criteria": {
+    "forbidden_words": [],
+    "topics_to_exclude": [
+      "Political partisan statements",
+      "Controversial social issues",
+      "Personal attacks on other researchers",
+      "Non-peer-reviewed health claims",
+      "Conspiracy theories"
+    ],
+    "tone_requirements": [
+      "Evidence-based language",
+      "Respectful of differing viewpoints",
+      "Avoids absolutes and hyperbole"
+    ],
+    "additional_instructions": "Flag tweets that make unsubstantiated claims or attack individuals. Keep scholarly discussion, research sharing, and respectful debate."
+  }
+}
+```
+
+<Tip>
+**Use case**: Researchers applying for tenure or joining institutions with strict public communication guidelines.
+</Tip>
+
+### Tech startup founder
+
+For founders wanting professional but personality-driven content:
+
+```json config.json
+{
+  "criteria": {
+    "forbidden_words": [
+      "scam",
+      "fraud",
+      "fake"
+    ],
+    "topics_to_exclude": [
+      "Personal attacks on competitors",
+      "Disparaging comments about other companies",
+      "Negative comments about investors or employees",
+      "Controversial political statements"
+    ],
+    "tone_requirements": [
+      "No aggressive or confrontational language toward others",
+      "Avoid pessimistic or defeatist messaging"
+    ],
+    "additional_instructions": "Flag tweets that could damage business relationships or investor confidence. Keep optimistic, constructive content even if casual."
+  }
+}
+```
+
+<Tip>
+**Use case**: Founders preparing for fundraising rounds or acquisition discussions.
+</Tip>
+
+### Minimal filtering
+
+For users who want to flag only legally risky content:
+
+```json config.json
+{
+  "criteria": {
+    "forbidden_words": [],
+    "topics_to_exclude": [
+      "Threats of violence",
+      "Illegal activities",
+      "Harassment or doxxing",
+      "Copyright infringement"
+    ],
+    "tone_requirements": [],
+    "additional_instructions": "Only flag content that could result in legal action or platform suspension"
+  }
+}
+```
+
+<Tip>
+**Use case**: Users who want to keep their authentic voice while removing only serious risks.
+</Tip>
+
+## Testing and refining criteria
+
+<Steps>
+  <Step title="Start with a test sample">
+    Create a small test archive with 10-20 representative tweets to test your criteria.
+    
+    ```bash
+    # Backup your full archive
+    mv data/tweets/tweets.json data/tweets/tweets-full.json
+    
+    # Create a small test file (manually select 20 tweets)
+    # ... copy sample tweets ...
+    ```
+  </Step>
+  
+  <Step title="Run analysis on test data">
+    ```bash
+    python src/main.py extract-tweets
+    python src/main.py analyze-tweets
+    ```
+  </Step>
+  
+  <Step title="Review false positives/negatives">
+    Check `data/tweets/processed/results.csv`:
+    - **False positives**: Good tweets incorrectly flagged
+    - **False negatives**: Bad tweets that should be flagged but weren't
+  </Step>
+  
+  <Step title="Adjust criteria">
+    Based on your review:
+    - Too many false positives → Make criteria more specific
+    - Too many false negatives → Make criteria broader
+  </Step>
+  
+  <Step title="Reset and retry">
+    ```bash
+    rm data/checkpoint.txt
+    rm data/tweets/processed/results.csv
+    python src/main.py analyze-tweets
+    ```
+  </Step>
+  
+  <Step title="Deploy on full archive">
+    Once satisfied, restore your full archive:
+    
+    ```bash
+    mv data/tweets/tweets-full.json data/tweets/tweets.json
+    rm data/checkpoint.txt
+    python src/main.py extract-tweets
+    python src/main.py analyze-tweets
+    ```
+  </Step>
+</Steps>
+
+## Common criteria patterns
+
+### Pattern: Word variations
+
+To catch word variations, add multiple forms:
+
+```json
+"forbidden_words": [
+  "crypto",
+  "cryptocurrency",
+  "cryptocurrencies",
+  "bitcoin",
+  "BTC",
+  "ethereum",
+  "ETH"
+]
+```
+
+### Pattern: Time-based filtering
+
+Target specific time periods using `additional_instructions`:
+
+```json
+"additional_instructions": "Be especially strict with tweets from 2017-2018 during the ICO boom. Flag any cryptocurrency enthusiasm from that period."
+```
+
+<Note>
+The AI doesn't have access to tweet timestamps in the current implementation, but mentioning time periods can help it recognize context clues in the content.
+</Note>
+
+### Pattern: Industry-specific jargon
+
+Remove industry-specific terms you no longer want associated with you:
+
+```json
+"forbidden_words": [
+  "synergy",
+  "disruptive",
+  "paradigm shift",
+  "circle back",
+  "low-hanging fruit"
+],
+"additional_instructions": "Flag corporate buzzwords and empty jargon"
+```
+
+## Troubleshooting criteria
+
+### Everything gets flagged
+
+Your criteria is too strict:
+
+<CodeGroup>
+```json Before (too strict)
+{
+  "criteria": {
+    "topics_to_exclude": [
+      "Any opinion",
+      "Personal thoughts",
+      "Casual language"
+    ]
+  }
+}
+```
+
+```json After (balanced)
+{
+  "criteria": {
+    "topics_to_exclude": [
+      "Strong political opinions",
+      "Controversial personal views",
+      "Unprofessional casual language"
+    ]
+  }
+}
+```
+</CodeGroup>
+
+### Nothing gets flagged
+
+Your criteria is too lenient:
+
+<CodeGroup>
+```json Before (too lenient)
+{
+  "criteria": {
+    "forbidden_words": ["fuck"],
+    "topics_to_exclude": [
+      "Explicit content"
+    ]
+  }
+}
+```
+
+```json After (comprehensive)
+{
+  "criteria": {
+    "forbidden_words": [
+      "fuck",
+      "shit",
+      "damn",
+      "wtf",
+      "ass"
+    ],
+    "topics_to_exclude": [
+      "Explicit content",
+      "Profanity",
+      "Unprofessional language",
+      "Aggressive tone"
+    ],
+    "additional_instructions": "Flag any language that wouldn't be appropriate in a professional email"
+  }
+}
+```
+</CodeGroup>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Basic workflow" icon="route" href="/examples/basic-workflow">
+    Learn the end-to-end process
+  </Card>
+  
+  <Card title="Large archives" icon="database" href="/examples/large-archives">
+    Handle archives with 10,000+ tweets
+  </Card>
+</CardGroup>

@@ -1,0 +1,549 @@
+---
+title: Analyzing tweets
+description: Learn how to analyze tweets with Google Gemini AI and generate a list of tweets to delete based on your custom criteria
+---
+
+Once you've extracted tweets from your archive, you can analyze them using Google's Gemini AI to identify which tweets no longer align with your values.
+
+## Prerequisites
+
+Before analyzing, ensure you have:
+
+- ✅ Extracted tweets to `data/tweets/transformed/tweets.csv`
+- ✅ Set `GEMINI_API_KEY` in your `.env` file
+- ✅ Configured analysis criteria in `config.json` (optional)
+
+<Info>
+  If you haven't extracted tweets yet, see the [Extracting tweets](/guides/extracting-tweets) guide.
+</Info>
+
+## Running the analysis
+
+Start the analysis with a single command:
+
+```bash
+python src/main.py analyze-tweets
+```
+
+### What happens during analysis
+
+The analysis process follows these steps from `application.py:64-122`:
+
+<Steps>
+  <Step title="Load extracted tweets">
+    The tool reads your transformed CSV file:
+
+    ```python
+    logger.info(f"Loading tweets from {settings.transformed_tweets_path}")
+    parser = CSVParser(settings.transformed_tweets_path)
+    tweets = parser.parse()
+
+    if not tweets:
+        logger.warning("No tweets found to analyze")
+        return Result(success=True, count=0)
+
+    logger.info(f"Loaded {len(tweets)} tweets for analysis")
+    ```
+  </Step>
+
+  <Step title="Initialize checkpoint system">
+    The checkpoint allows resuming if interrupted:
+
+    ```python
+    with Checkpoint(settings.checkpoint_path) as checkpoint:
+        start_index = checkpoint.load()
+        logger.info(f"Resuming from tweet index {start_index}")
+    ```
+
+    On first run, `start_index` is 0. On subsequent runs, it's the last saved position.
+  </Step>
+
+  <Step title="Process tweets in batches">
+    Tweets are analyzed in batches (default: 10 tweets per batch):
+
+    ```python
+    for i in range(start_index, len(tweets), settings.batch_size):
+        batch = tweets[i : i + settings.batch_size]
+        batch_num = (i // settings.batch_size) + 1
+        total_batches = (len(tweets) + settings.batch_size - 1) // settings.batch_size
+
+        logger.info(
+            f"Processing batch {batch_num}/{total_batches} "
+            f"(tweets {i + 1}-{min(i + len(batch), len(tweets))} of {len(tweets)})"
+        )
+    ```
+  </Step>
+
+  <Step title="Skip retweets">
+    Retweets are automatically skipped:
+
+    ```python
+    for tweet in batch:
+        if _is_retweet(tweet):
+            continue
+    ```
+
+    From `application.py:125-126`:
+    ```python
+    def _is_retweet(tweet) -> bool:
+        return tweet.content.startswith("RT @")
+    ```
+  </Step>
+
+  <Step title="Analyze each tweet">
+    Each tweet is sent to Gemini AI for analysis:
+
+    ```python
+    try:
+        result = self.analyzer.analyze(tweet)
+        logger.debug(f"Tweet {tweet.id}: {result.decision.value}")
+        analyzed_count += 1
+
+        if result.decision == Decision.DELETE:
+            writer.write_result(result)
+    except Exception as e:
+        logger.error(f"Failed to analyze tweet {tweet.id}: {e}")
+        return Result(
+            success=False,
+            count=analyzed_count,
+            error_type="analysis_failed",
+            error_message=str(e),
+        )
+    ```
+  </Step>
+
+  <Step title="Save checkpoint">
+    After each batch, progress is saved:
+
+    ```python
+    checkpoint.save(i + len(batch))
+    logger.info(f"Checkpoint saved at index {i + len(batch)}")
+    ```
+  </Step>
+</Steps>
+
+### Expected output
+
+During analysis, you'll see progress logs like this:
+
+```bash
+Analyzing tweets...
+2024-01-15 11:00:00 - application - INFO - Loading tweets from data/tweets/transformed/tweets.csv
+2024-01-15 11:00:00 - application - INFO - Loaded 1523 tweets for analysis
+2024-01-15 11:00:00 - application - INFO - Resuming from tweet index 0
+2024-01-15 11:00:00 - __main__ - INFO - Gemini analyzer initialized
+2024-01-15 11:00:01 - application - INFO - Processing batch 1/153 (tweets 1-10 of 1523)
+2024-01-15 11:00:12 - application - INFO - Checkpoint saved at index 10
+2024-01-15 11:00:12 - application - INFO - Processing batch 2/153 (tweets 11-20 of 1523)
+2024-01-15 11:00:23 - application - INFO - Checkpoint saved at index 20
+...
+```
+
+## How the AI analysis works
+
+The Gemini analyzer sends each tweet with a custom prompt built from your criteria.
+
+### Prompt construction
+
+From `analyzer.py:107-135`, the prompt is built like this:
+
+```python
+def _build_prompt(self, tweet: Tweet) -> str:
+    criteria_parts = []
+
+    # Add topics and tone requirements
+    criteria_parts.extend(settings.criteria.topics_to_exclude)
+    criteria_parts.extend(settings.criteria.tone_requirements)
+
+    # Add forbidden words
+    if settings.criteria.forbidden_words:
+        words = ", ".join(settings.criteria.forbidden_words)
+        criteria_parts.append(f"Contains any of these words: {words}")
+
+    # Format as numbered list
+    criteria_list = "\n".join(f"{i + 1}. {c}" for i, c in enumerate(criteria_parts))
+
+    # Add additional instructions
+    additional = ""
+    if settings.criteria.additional_instructions:
+        additional = f"\n\nAdditional guidance: {settings.criteria.additional_instructions}"
+
+    return f"""You are evaluating tweets for a professional's Twitter cleanup.
+
+Tweet ID: {tweet.id}
+Tweet: "{tweet.content}"
+
+Mark for deletion if it violates any of these criteria:
+{criteria_list}{additional}
+
+Respond in JSON format:
+{{
+  "decision": "DELETE" or "KEEP",
+  "reason": "brief explanation"
+}}"""
+```
+
+### Example prompt
+
+With default criteria, a tweet gets this prompt:
+
+```
+You are evaluating tweets for a professional's Twitter cleanup.
+
+Tweet ID: 1234567890
+Tweet: "This crypto project is going to the moon! 🚀"
+
+Mark for deletion if it violates any of these criteria:
+1. Profanity or unprofessional language
+2. Personal attacks or insults
+3. Outdated political opinions
+4. Professional language only
+5. Respectful communication
+6. Contains any of these words: crypto, NFT, web3
+
+Additional guidance: Flag any content that could harm professional reputation
+
+Respond in JSON format:
+{
+  "decision": "DELETE" or "KEEP",
+  "reason": "brief explanation"
+}
+```
+
+### API request
+
+The prompt is sent to Gemini from `analyzer.py:70-80`:
+
+```python
+@retry_with_backoff(max_retries=3, initial_delay=1.0)
+def analyze(self, tweet: Tweet) -> AnalysisResult:
+    self._rate_limit()  # Enforce rate limiting before API call
+
+    prompt = self._build_prompt(tweet)
+
+    response = self.client.models.generate_content(
+        model=self.model,
+        contents=prompt,
+        config=genai.types.GenerateContentConfigDict(response_mime_type="application/json"),
+    )
+```
+
+<Info>
+  The `response_mime_type="application/json"` ensures Gemini returns structured JSON we can parse.
+</Info>
+
+### Response parsing
+
+Gemini returns a JSON decision that's parsed and validated:
+
+```python
+if not response.text:
+    raise ValueError(f"Empty response from Gemini for tweet {tweet.id}")
+
+try:
+    data = json.loads(response.text)
+except json.JSONDecodeError as e:
+    raise ValueError(
+        f"Invalid Gemini response for tweet {tweet.id}: {e}"
+    ) from e
+
+try:
+    decision = Decision(data["decision"].upper())
+except KeyError as e:
+    raise ValueError(
+        f"Missing decision field in Gemini response for tweet {tweet.id}"
+    ) from e
+
+return AnalysisResult(tweet_url=settings.tweet_url(tweet.id), decision=decision)
+```
+
+## Rate limiting and retry logic
+
+### Rate limiting
+
+To avoid hitting API limits, the analyzer enforces delays between requests from `analyzer.py:64-68`:
+
+```python
+def _rate_limit(self) -> None:
+    elapsed = time.time() - self.last_request_time
+    if elapsed < self.min_request_interval:
+        time.sleep(self.min_request_interval - elapsed)
+    self.last_request_time = time.time()
+```
+
+The default interval is 1.0 seconds (configurable via `RATE_LIMIT_SECONDS`).
+
+### Automatic retries
+
+Transient errors trigger automatic retries with exponential backoff from `analyzer.py:11-49`:
+
+```python
+def retry_with_backoff(max_retries: int = 3, initial_delay: float = 1.0):
+    """Retry decorator with exponential backoff for transient errors"""
+
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            delay = initial_delay
+            last_exception = None
+
+            for attempt in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    last_exception = e
+                    error_str = str(e).lower()
+                    is_retryable = any(
+                        keyword in error_str
+                        for keyword in [
+                            "timeout",
+                            "connection",
+                            "rate limit",
+                            "quota",
+                            "503",
+                            "429",
+                            "temporarily unavailable",
+                        ]
+                    )
+
+                    if not is_retryable or attempt == max_retries - 1:
+                        raise
+
+                    sleep_time = delay * (2**attempt) + (time.time() % 1)
+                    time.sleep(sleep_time)
+
+            raise last_exception
+
+        return wrapper
+
+    return decorator
+```
+
+Retryable errors include:
+- Timeouts
+- Connection issues
+- Rate limit errors (429)
+- Server errors (503)
+- Quota exceeded
+
+<Tip>
+  The retry logic automatically handles temporary API issues. You don't need to manually restart.
+</Tip>
+
+## Analysis results
+
+### Output file
+
+Tweets flagged for deletion are written to `data/tweets/processed/results.csv`:
+
+```csv
+tweet_url,deleted
+https://x.com/username/status/1234567890,false
+https://x.com/username/status/9876543210,false
+https://x.com/username/status/5555555555,false
+```
+
+From `storage.py:172-181`:
+```python
+def write_result(self, result: AnalysisResult) -> None:
+    if not self.writer:
+        raise RuntimeError("CSVWriter is not open")
+
+    if not self.header_written:
+        self.writer.writerow([RESULT_CSV_URL_COLUMN, RESULT_CSV_DELETED_COLUMN])
+        self.header_written = True
+
+    self.writer.writerow([result.tweet_url, CSV_BOOL_FALSE])
+    self.file.flush()
+```
+
+<Note>
+  Only tweets with `Decision.DELETE` are written to the results file. Tweets marked `KEEP` are not recorded.
+</Note>
+
+### The deleted column
+
+The `deleted` column starts as `false` for all tweets. This is for manual tracking:
+
+1. Review each tweet URL in your browser
+2. Decide if you agree with the AI's assessment
+3. If you delete it, update the row to `deleted=true`
+4. Track your cleanup progress
+
+## Completion summary
+
+When analysis finishes, you'll see:
+
+```bash
+2024-01-15 11:45:30 - application - INFO - Analysis complete. Results written to data/tweets/processed/results.csv
+Successfully analyzed 1523 tweets
+```
+
+<Accordion title="What counts as 'analyzed'?">
+  Only original tweets are counted. Retweets (starting with "RT @") are skipped and not included in the analyzed count.
+
+  From `application.py:94-96`:
+  ```python
+  for tweet in batch:
+      if _is_retweet(tweet):
+          continue
+  ```
+</Accordion>
+
+## Performance estimates
+
+### Processing time
+
+With default settings:
+- **Rate limit**: 1 second per tweet
+- **Batch size**: 10 tweets
+- **Checkpoint frequency**: Every 10 tweets
+
+For 1,000 tweets:
+- Time: ~17 minutes (1 second × 1,000 tweets)
+- API calls: ~1,000 requests
+- Cost: Free within Gemini's daily limits
+
+### Scaling considerations
+
+<Tabs>
+  <Tab title="Small archive (< 1,000 tweets)">
+    - Processing time: 10-20 minutes
+    - API usage: Well within free tier
+    - Recommendation: Use default settings
+  </Tab>
+
+  <Tab title="Medium archive (1,000-10,000 tweets)">
+    - Processing time: 2-3 hours
+    - API usage: May hit daily limits
+    - Recommendation: Run over multiple days or increase rate limit to 2-3 seconds
+  </Tab>
+
+  <Tab title="Large archive (> 10,000 tweets)">
+    - Processing time: 5+ hours
+    - API usage: Definitely requires multiple days
+    - Recommendation: Consider paid Gemini API or process in chunks
+  </Tab>
+</Tabs>
+
+## Monitoring progress
+
+### Log verbosity
+
+Control detail level with `LOG_LEVEL` in `.env`:
+
+```bash
+# See every tweet's decision
+LOG_LEVEL=DEBUG
+
+# See batch progress only (recommended)
+LOG_LEVEL=INFO
+
+# See only warnings and errors
+LOG_LEVEL=WARNING
+```
+
+### Checking intermediate results
+
+While analysis runs, you can check progress:
+
+```bash
+# Count flagged tweets so far
+wc -l data/tweets/processed/results.csv
+
+# View latest flagged tweets
+tail -20 data/tweets/processed/results.csv
+
+# Check checkpoint position
+cat data/checkpoint.txt
+```
+
+## Interrupting analysis
+
+You can safely stop analysis at any time:
+
+- **Ctrl+C**: Graceful interruption
+- **System crash**: Progress saved after each batch
+- **API quota exceeded**: Automatically stops with error
+
+To resume, just run the same command again:
+
+```bash
+python src/main.py analyze-tweets
+```
+
+<Info>
+  See the [Resume interrupted analysis](/guides/resume-interrupted-analysis) guide for details on checkpoint behavior.
+</Info>
+
+## Troubleshooting analysis
+
+### No tweets found
+
+```
+Error: CSV file not found: data/tweets/transformed/tweets.csv
+```
+
+**Solution:** Run extraction first:
+
+```bash
+python src/main.py extract-tweets
+```
+
+### Missing API key
+
+```
+Error: GEMINI_API_KEY is required
+```
+
+**Solution:** Add your API key to `.env`:
+
+```bash
+echo "GEMINI_API_KEY=your_key_here" >> .env
+```
+
+### Rate limit exceeded
+
+```
+Failed to analyze tweet 123456: 429 Quota exceeded
+```
+
+**Solution:** The tool will retry automatically. If it persists:
+
+1. Increase rate limit delay:
+   ```bash
+   RATE_LIMIT_SECONDS=2.0
+   ```
+2. Wait 24 hours for quota reset
+3. Or upgrade to paid Gemini API
+
+### Analysis fails on specific tweet
+
+```
+Error: Failed to analyze tweet 987654321: Invalid response
+```
+
+**Solution:** The analysis stops on errors. Check:
+
+1. Tweet content might have special characters causing parsing issues
+2. Review the tweet manually at: `https://x.com/username/status/987654321`
+3. Skip it by manually incrementing the checkpoint:
+   ```bash
+   echo "10" > data/checkpoint.txt  # Skip to tweet index 10
+   ```
+
+## Next steps
+
+After analysis completes:
+
+<CardGroup cols={2}>
+  <Card title="Review results" icon="list" href="/guides/analyzing-tweets#analysis-results">
+    Understand the results CSV and deletion workflow
+  </Card>
+  <Card title="Customize criteria" icon="sliders" href="/guides/criteria-customization">
+    Fine-tune analysis criteria for better results
+  </Card>
+  <Card title="Resume analysis" icon="rotate" href="/guides/resume-interrupted-analysis">
+    Learn about checkpoint and resume features
+  </Card>
+</CardGroup>

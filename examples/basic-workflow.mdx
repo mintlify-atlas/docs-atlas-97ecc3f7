@@ -1,0 +1,232 @@
+---
+title: Basic end-to-end workflow
+description: Step-by-step guide to running your first tweet audit from archive to deletion list
+---
+
+This guide walks you through a complete tweet audit workflow, from setting up your environment to reviewing the final results.
+
+## Prerequisites checklist
+
+Before you begin, ensure you have:
+
+<Steps>
+  <Step title="X archive downloaded">
+    Request your archive from X.com → Settings → Download archive. This takes 24-48 hours.
+  </Step>
+  
+  <Step title="Gemini API key ready">
+    Get a free API key from [Google AI Studio](https://aistudio.google.com/app/apikey).
+  </Step>
+  
+  <Step title="Python 3.12+ installed">
+    Verify with `python --version` in your terminal.
+  </Step>
+</Steps>
+
+## Complete workflow
+
+### Step 1: Initial setup
+
+Clone the repository and install dependencies:
+
+<CodeGroup>
+```bash pip
+git clone https://github.com/DanielPopoola/tweet-audit-impl.git
+cd tweet-audit
+pip install -r requirements.txt
+```
+
+```bash uv (recommended)
+git clone https://github.com/DanielPopoola/tweet-audit-impl.git
+cd tweet-audit
+pip install uv
+uv sync
+```
+</CodeGroup>
+
+### Step 2: Configure environment
+
+Create a `.env` file in the project root with your credentials:
+
+```bash .env
+# Required: Your Gemini API key
+GEMINI_API_KEY=AIzaSyD_example_key_here_abc123
+
+# Required: Your X username
+X_USERNAME=yourhandle
+
+# Optional: Rate limiting (default: 1.0)
+RATE_LIMIT_SECONDS=1.0
+
+# Optional: Log level (default: INFO)
+LOG_LEVEL=INFO
+```
+
+<Tip>
+Start with the default `RATE_LIMIT_SECONDS=1.0` setting. This processes ~3,600 tweets per hour while staying well within Gemini's free tier limits (1,500 requests per day).
+</Tip>
+
+### Step 3: Create your criteria
+
+Create a `config.json` file with your deletion criteria:
+
+```json config.json
+{
+  "criteria": {
+    "forbidden_words": ["damn", "wtf", "crypto", "NFT"],
+    "topics_to_exclude": [
+      "Profanity or unprofessional language",
+      "Personal attacks or insults",
+      "Outdated political opinions"
+    ],
+    "tone_requirements": [
+      "Professional language only",
+      "Respectful communication"
+    ],
+    "additional_instructions": "Flag any content that could harm professional reputation"
+  }
+}
+```
+
+<Note>
+If you don't create `config.json`, the tool uses sensible defaults focused on maintaining professional content.
+</Note>
+
+### Step 4: Prepare your archive
+
+Extract your X archive and place the tweets file in the correct location:
+
+```bash
+mkdir -p data/tweets
+cp ~/Downloads/twitter-archive/data/tweets.json data/tweets/tweets.json
+```
+
+Verify your archive is in place:
+
+```bash
+ls -lh data/tweets/tweets.json
+```
+
+Expected output:
+```
+-rw-r--r-- 1 user user 25M Jan 15 10:30 data/tweets/tweets.json
+```
+
+### Step 5: Extract tweets
+
+Convert the JSON archive to CSV format for processing:
+
+```bash
+python src/main.py extract-tweets
+```
+
+Expected output:
+```
+Extracting tweets from archive...
+Successfully extracted 5243 tweets
+```
+
+This creates `data/tweets/transformed/tweets.csv` with columns:
+- `id` - Tweet ID
+- `content` - Tweet text
+
+### Step 6: Analyze tweets
+
+Run the AI analysis to flag tweets for deletion:
+
+```bash
+python src/main.py analyze-tweets
+```
+
+Expected output:
+```
+Analyzing tweets...
+Processing batch 1/525 (10 tweets)
+Processing batch 2/525 (10 tweets)
+...
+Successfully analyzed 5243 tweets
+```
+
+<Tip>
+The tool processes tweets in batches of 10 and saves progress automatically. If interrupted, simply run the command again to resume where you left off.
+</Tip>
+
+### Step 7: Review results
+
+Open the generated CSV file:
+
+```bash
+cat data/tweets/processed/results.csv
+```
+
+Example output:
+```csv
+tweet_url,deleted
+https://x.com/yourhandle/status/1234567890,false
+https://x.com/yourhandle/status/9876543210,false
+https://x.com/yourhandle/status/5555555555,false
+```
+
+Each flagged tweet is listed with:
+- **tweet_url** - Direct link to the tweet
+- **deleted** - Status tracker (initially `false`)
+
+### Step 8: Manual deletion
+
+Review and delete flagged tweets:
+
+<Steps>
+  <Step title="Open the tweet URL">
+    Click or copy the URL from the CSV to view the tweet on X.
+  </Step>
+  
+  <Step title="Decide if you agree">
+    Read the tweet and determine if you want to delete it.
+  </Step>
+  
+  <Step title="Delete on X">
+    If you agree, click the three dots on the tweet and select "Delete".
+  </Step>
+  
+  <Step title="Track your progress">
+    Update the `deleted` column in the CSV to `true` for tweets you've removed.
+  </Step>
+</Steps>
+
+<Note>
+The tool **never** deletes tweets automatically. You maintain complete control over what gets removed from your profile.
+</Note>
+
+## Understanding the output
+
+After analysis, your `data/` directory structure looks like:
+
+```
+data/
+├── tweets/
+│   ├── tweets.json              # Original X archive
+│   ├── transformed/
+│   │   └── tweets.csv           # Extracted tweets (5,243 rows)
+│   └── processed/
+│       └── results.csv          # Flagged tweets (127 rows)
+└── checkpoint.txt               # Resume point (batch 525)
+```
+
+### Result statistics
+
+From the example above:
+- **Total tweets**: 5,243
+- **Flagged for deletion**: 127 (2.4%)
+- **Processing time**: ~1.5 hours at 1 req/sec
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Custom criteria" icon="sliders" href="/examples/custom-criteria">
+    Learn how to fine-tune your deletion criteria
+  </Card>
+  
+  <Card title="Large archives" icon="database" href="/examples/large-archives">
+    Handle archives with 10,000+ tweets efficiently
+  </Card>
+</CardGroup>

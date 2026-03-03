@@ -1,0 +1,303 @@
+---
+title: Rate limiting
+description: Understand how the Tweet Audit Tool manages API rate limits and implements retry logic with exponential backoff
+---
+
+The Tweet Audit Tool implements a two-layer rate limiting strategy to ensure reliable API communication with Google's Gemini API while avoiding quota exhaustion.
+
+## Rate limiting layers
+
+The tool uses both **proactive rate limiting** (preventing issues) and **reactive retry logic** (handling errors).
+
+### Layer 1: Proactive rate limiting
+
+Before each API request, the analyzer enforces a minimum time interval between consecutive calls.
+
+```python src/analyzer.py
+def _rate_limit(self) -> None:
+    elapsed = time.time() - self.last_request_time
+    if elapsed < self.min_request_interval:
+        time.sleep(self.min_request_interval - elapsed)
+    self.last_request_time = time.time()
+```
+
+This ensures that no two API calls happen faster than the configured interval, regardless of processing speed.
+
+### Layer 2: Retry with exponential backoff
+
+When rate limit errors occur despite proactive limiting, the `@retry_with_backoff` decorator automatically retries the request.
+
+```python src/analyzer.py
+@retry_with_backoff(max_retries=3, initial_delay=1.0)
+def analyze(self, tweet: Tweet) -> AnalysisResult:
+    self._rate_limit()  # Enforce rate limiting before API call
+    # ... API call logic
+```
+
+## Configuration
+
+### Environment variable
+
+Set the rate limit interval in your `.env` file:
+
+```bash .env
+# Wait 1 second between each API call (default)
+RATE_LIMIT_SECONDS=1.0
+
+# More conservative: wait 2 seconds
+RATE_LIMIT_SECONDS=2.0
+
+# Aggressive: wait 0.5 seconds (may hit limits)
+RATE_LIMIT_SECONDS=0.5
+```
+
+<Note>
+The `RATE_LIMIT_SECONDS` setting controls the **minimum** time between consecutive API calls. The actual time may be longer depending on API response times.
+</Note>
+
+### Configuration file
+
+Alternatively, modify `src/config.py` directly:
+
+```python src/config.py
+@dataclass
+class Settings:
+    # ... other settings
+    rate_limit_seconds: float = 1.0  # Change default here
+```
+
+## Retry behavior
+
+The retry mechanism handles transient failures with intelligent backoff.
+
+### Retryable errors
+
+The following error types trigger automatic retries:
+
+- **Timeout errors**: Network timeout or API timeout
+- **Connection errors**: Failed to establish connection
+- **Rate limit errors**: 429 (Too Many Requests)
+- **Quota errors**: API quota exceeded
+- **Service errors**: 503 (Service Unavailable)
+- **Temporary unavailability**: Transient service issues
+
+```python src/analyzer.py
+is_retryable = any(
+    keyword in error_str
+    for keyword in [
+        "timeout",
+        "connection",
+        "rate limit",
+        "quota",
+        "503",
+        "429",
+        "temporarily unavailable",
+    ]
+)
+```
+
+### Non-retryable errors
+
+These errors fail immediately without retry:
+
+- **Authentication errors**: Invalid API key
+- **Validation errors**: Malformed request
+- **Parse errors**: Invalid response format
+- **Application logic errors**: Internal bugs
+
+<Warning>
+If you see persistent 429 errors even after retries, increase `RATE_LIMIT_SECONDS` in your `.env` file. The default of 1 second may be too aggressive for your API tier.
+</Warning>
+
+## Exponential backoff algorithm
+
+Retry delays increase exponentially with each attempt to avoid overwhelming the API.
+
+```python src/analyzer.py
+for attempt in range(max_retries):
+    try:
+        return func(*args, **kwargs)
+    except Exception as e:
+        # ... error checking
+        sleep_time = delay * (2**attempt) + (time.time() % 1)
+        time.sleep(sleep_time)
+```
+
+### Backoff calculation
+
+With `initial_delay=1.0` and `max_retries=3`:
+
+| Attempt | Formula | Sleep Time (approx) |
+|---------|---------|--------------------|
+| 1st retry | `1.0 * (2^0) + jitter` | ~1 second |
+| 2nd retry | `1.0 * (2^1) + jitter` | ~2 seconds |
+| 3rd retry | `1.0 * (2^2) + jitter` | ~4 seconds |
+
+<Info>
+The `jitter` component (`time.time() % 1`) adds randomness to prevent thundering herd issues when multiple processes retry simultaneously.
+</Info>
+
+## Customizing retry behavior
+
+To adjust retry parameters, modify the decorator in `src/analyzer.py`:
+
+```python src/analyzer.py
+@retry_with_backoff(max_retries=5, initial_delay=2.0)  # More aggressive retries
+def analyze(self, tweet: Tweet) -> AnalysisResult:
+    # ...
+```
+
+### Recommended configurations
+
+<Steps>
+
+<Step title="Conservative (high reliability)">
+```python
+max_retries=5
+initial_delay=2.0
+RATE_LIMIT_SECONDS=2.0
+```
+Best for: Large archives, unstable networks, free API tiers
+</Step>
+
+<Step title="Balanced (default)">
+```python
+max_retries=3
+initial_delay=1.0
+RATE_LIMIT_SECONDS=1.0
+```
+Best for: Most use cases, moderate-sized archives
+</Step>
+
+<Step title="Aggressive (fast processing)">
+```python
+max_retries=2
+initial_delay=0.5
+RATE_LIMIT_SECONDS=0.5
+```
+Best for: Paid API tiers, small archives, fast networks
+<Warning>
+May cause rate limit errors on free tiers
+</Warning>
+</Step>
+
+</Steps>
+
+## Monitoring rate limits
+
+Watch the logs to understand rate limit behavior:
+
+```bash
+# Enable debug logging to see detailed timing
+export LOG_LEVEL=DEBUG
+python src/main.py analyze-tweets
+```
+
+You'll see output like:
+
+```
+2026-03-03 10:15:23 - analyzer - DEBUG - Tweet 1234567890: DELETE
+2026-03-03 10:15:24 - analyzer - DEBUG - Tweet 9876543210: KEEP
+```
+
+The timestamps show the actual rate limiting in action.
+
+## Handling API quota limits
+
+### Gemini API free tier limits
+
+- **Requests per minute**: 15
+- **Requests per day**: 1,500
+
+<Tip>
+With `RATE_LIMIT_SECONDS=1.0`, you make 60 requests/minute, which **exceeds** the free tier limit. Increase to `RATE_LIMIT_SECONDS=4.0` to stay within the 15 RPM limit.
+</Tip>
+
+### Calculating processing time
+
+For a given archive size and rate limit:
+
+```
+Processing time = (Number of tweets × RATE_LIMIT_SECONDS) / 60 minutes
+```
+
+Examples:
+- 1,000 tweets at 1.0 sec/tweet = ~17 minutes
+- 5,000 tweets at 2.0 sec/tweet = ~167 minutes (~3 hours)
+- 10,000 tweets at 4.0 sec/tweet = ~667 minutes (~11 hours)
+
+### Multi-day processing
+
+For large archives exceeding daily quotas:
+
+<Steps>
+
+<Step title="Day 1: Start analysis">
+```bash
+python src/main.py analyze-tweets
+```
+Run until you hit the daily limit (1,500 tweets on free tier)
+</Step>
+
+<Step title="Day 2: Resume automatically">
+```bash
+python src/main.py analyze-tweets
+```
+The checkpoint system resumes where you left off
+</Step>
+
+<Step title="Repeat until complete">
+Continue daily until all tweets are processed
+</Step>
+
+</Steps>
+
+<Info>
+The tool saves progress after each batch, so you can stop and resume at any time without losing work.
+</Info>
+
+## Best practices
+
+1. **Start conservative**: Use `RATE_LIMIT_SECONDS=2.0` for your first run
+2. **Monitor logs**: Check for 429 errors indicating you're hitting limits
+3. **Adjust gradually**: Decrease the interval only if you see no rate limit errors
+4. **Consider batch size**: Smaller batches (see [batch processing](/advanced/batch-processing)) provide more frequent checkpoints
+5. **Plan for quotas**: If you have 10,000+ tweets, expect multi-day processing on free tier
+
+## Troubleshooting
+
+### "Rate limit exceeded" errors persist
+
+**Symptom**: Even after retries, you see 429 errors
+
+**Solution**: Increase `RATE_LIMIT_SECONDS` to 4.0 or higher:
+
+```bash .env
+RATE_LIMIT_SECONDS=4.0
+```
+
+### Processing is too slow
+
+**Symptom**: Analysis is taking longer than expected
+
+**Solution**: Decrease `RATE_LIMIT_SECONDS` if you're on a paid tier:
+
+```bash .env
+RATE_LIMIT_SECONDS=0.5
+```
+
+### Intermittent timeout errors
+
+**Symptom**: Occasional timeout errors but retries succeed
+
+**Solution**: This is normal. The retry mechanism handles transient network issues automatically. No action needed unless errors are frequent.
+
+### "Max retries exceeded" error
+
+**Symptom**: Analysis fails with "max retries exceeded"
+
+**Solution**: Either:
+- Check your internet connection
+- Verify your API key is valid
+- Increase `max_retries` in `src/analyzer.py`
+- Contact Google if the Gemini API is experiencing outages

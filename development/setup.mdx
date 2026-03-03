@@ -1,0 +1,270 @@
+---
+title: Development environment setup
+description: Set up your local development environment for contributing to Tweet Audit Tool
+---
+
+## Prerequisites
+
+Before you begin, ensure you have the following installed on your system:
+
+- **Python 3.12+** - Check your version with `python --version`
+- **Git** - For version control
+- **pip** or **uv** - For package management (uv is recommended for faster installation)
+- A code editor (VS Code, PyCharm, etc.)
+
+## Initial setup
+
+<Steps>
+  <Step title="Clone the repository">
+    Clone the project and navigate to the directory:
+
+    ```bash
+    git clone https://github.com/DanielPopoola/tweet-audit-impl.git
+    cd tweet-audit
+    ```
+  </Step>
+
+  <Step title="Create a virtual environment">
+    It's recommended to use a virtual environment to isolate dependencies:
+
+    <CodeGroup>
+      ```bash venv
+      python -m venv .venv
+      source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+      ```
+
+      ```bash uv (recommended)
+      pip install uv
+      uv venv
+      source .venv/bin/activate
+      ```
+    </CodeGroup>
+  </Step>
+
+  <Step title="Install dependencies">
+    Install the package in editable mode along with development dependencies:
+
+    <CodeGroup>
+      ```bash pip
+      # Install package in editable mode
+      pip install -e .
+      
+      # Install development dependencies
+      pip install pytest pytest-cov ruff
+      ```
+
+      ```bash uv (recommended)
+      # Install package in editable mode
+      uv pip install -e .
+      
+      # Install development dependencies
+      uv pip install pytest pytest-cov ruff
+      ```
+    </CodeGroup>
+
+    <Note>
+      The `-e` flag installs the package in editable mode, which means changes to the source code are immediately reflected without reinstalling.
+    </Note>
+  </Step>
+
+  <Step title="Create environment configuration">
+    Copy the example environment file and add your API key:
+
+    ```bash
+    cp .env.example .env
+    ```
+
+    Edit `.env` with your configuration:
+
+    ```bash .env
+    # Required: Your Gemini API key
+    GEMINI_API_KEY=your_api_key_here
+    
+    # Required: Your X username
+    X_USERNAME=your_x_username
+    
+    # Optional: Model to use (default: gemini-2.5-flash)
+    GEMINI_MODEL=gemini-2.5-flash
+    
+    # Optional: Rate limit between API calls in seconds (default: 1.0)
+    RATE_LIMIT_SECONDS=1.0
+    
+    # Optional: Log level (default: INFO)
+    LOG_LEVEL=INFO
+    ```
+
+    <Info>
+      Get your free Gemini API key from [Google AI Studio](https://aistudio.google.com/app/apikey).
+    </Info>
+  </Step>
+
+  <Step title="Verify installation">
+    Verify everything is set up correctly:
+
+    ```bash
+    python src/main.py --help
+    ```
+
+    You should see the help message without any errors.
+  </Step>
+</Steps>
+
+## Project structure
+
+Understanding the codebase organization:
+
+```
+tweet-audit/
+├── src/                          # Application source code
+│   ├── main.py                   # CLI entry point - starts here!
+│   ├── application.py            # Orchestration layer
+│   ├── analyzer.py               # Gemini AI integration
+│   ├── storage.py                # File I/O operations
+│   ├── config.py                 # Configuration loading
+│   └── models.py                 # Data models (Tweet, Result, etc.)
+│
+├── tests/                        # Test suite
+│   ├── test_main.py              # CLI tests
+│   ├── test_application.py       # Application logic tests
+│   ├── test_analyzer.py          # AI analyzer tests
+│   ├── test_storage.py           # File I/O tests
+│   ├── test_config.py            # Configuration tests
+│   ├── conftest.py               # Shared test fixtures
+│   └── testdata/                 # Test fixtures (sample JSONs/CSVs)
+│       ├── tweets.json
+│       ├── tweets.csv
+│       ├── empty.json
+│       └── invalid.json
+│
+├── data/                         # Runtime data (gitignored)
+│   ├── tweets/
+│   │   ├── tweets.json           # Your X archive
+│   │   ├── transformed/
+│   │   │   └── tweets.csv        # Extracted tweets
+│   │   └── processed/
+│   │       └── results.csv       # Flagged tweets
+│   └── checkpoint.txt            # Progress tracking
+│
+├── .env                          # Environment variables (gitignored)
+├── .env.example                  # Template for .env
+├── config.json                   # Analysis criteria (optional)
+├── config.example.json           # Template for config.json
+├── pyproject.toml                # Project metadata and dependencies
+├── .gitignore                    # Git ignore rules
+├── .python-version               # Python version requirement
+├── README.md                     # User documentation
+└── DEVELOPMENT.md                # Development guide
+```
+
+### Code organization philosophy
+
+Each file has a single responsibility:
+
+- **models.py** - Pure data structures (no logic)
+- **config.py** - Configuration loading (no business logic)
+- **storage.py** - File operations (no AI, no HTTP)
+- **analyzer.py** - AI integration (no file I/O)
+- **application.py** - Glue code (orchestrates the above)
+- **main.py** - CLI interface (delegates to application)
+
+<Note>
+  This separation makes testing easier and code more maintainable.
+</Note>
+
+## Development tools
+
+### Code formatting and linting
+
+The project uses Ruff for both formatting and linting:
+
+```bash
+# Check for issues
+ruff check .
+
+# Auto-fix issues
+ruff check --fix .
+
+# Format code
+ruff format .
+
+# Run both
+ruff check --fix . && ruff format .
+```
+
+### Debugging
+
+Enable debug logging to troubleshoot issues:
+
+```bash
+# Set in .env
+LOG_LEVEL=DEBUG
+
+# Or inline
+LOG_LEVEL=DEBUG python src/main.py analyze-tweets
+```
+
+You can also use Python's built-in debugger:
+
+```python
+# Add breakpoint in code
+def analyze(self, tweet: Tweet) -> AnalysisResult:
+    breakpoint()  # Execution pauses here
+    prompt = self._build_prompt(tweet)
+    # ...
+```
+
+Run with:
+
+```bash
+python -m pdb src/main.py analyze-tweets
+```
+
+## Troubleshooting
+
+### Import errors
+
+If you encounter import errors, ensure the package is installed in editable mode:
+
+```bash
+# Reinstall in editable mode
+pip install -e .
+
+# Or add src to PYTHONPATH
+export PYTHONPATH="${PYTHONPATH}:${PWD}/src"
+```
+
+### Tests failing locally
+
+```bash
+# Clear pytest cache
+rm -rf .pytest_cache
+
+# Reinstall in editable mode
+pip install -e .
+
+# Check Python version
+python --version  # Should be 3.12+
+
+# Check dependencies
+pip list | grep -E "google-genai|pytest|python-dotenv"
+```
+
+### Missing API key error
+
+Ensure your `.env` file exists and contains a valid API key:
+
+```bash
+GEMINI_API_KEY=your_actual_api_key
+X_USERNAME=your_username
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Running tests" icon="flask" href="/development/testing">
+    Learn how to run tests and write new test cases
+  </Card>
+  <Card title="Contributing" icon="code-pull-request" href="/development/contributing">
+    Guidelines for contributing to the project
+  </Card>
+</CardGroup>

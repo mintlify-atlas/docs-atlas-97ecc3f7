@@ -1,0 +1,455 @@
+---
+title: Configuration
+description: Learn how to configure the Tweet Audit Tool using environment variables and config.json for customized tweet analysis
+---
+
+The Tweet Audit Tool uses two configuration methods: environment variables for credentials and system settings, and a JSON file for analysis criteria.
+
+## Environment variables
+
+Environment variables are loaded from a `.env` file in your project root. This keeps sensitive credentials like API keys out of version control.
+
+<Steps>
+  <Step title="Create .env file">
+    Create a `.env` file in your project root:
+
+    ```bash
+    touch .env
+    ```
+  </Step>
+
+  <Step title="Add required variables">
+    Add your Gemini API key and X username:
+
+    ```bash .env
+    # Required: Your Gemini API key from https://aistudio.google.com/app/apikey
+    GEMINI_API_KEY=your_api_key_here
+
+    # Required: Your X (Twitter) username
+    X_USERNAME=your_x_username
+    ```
+  </Step>
+
+  <Step title="Configure optional settings">
+    Add optional configuration for performance tuning:
+
+    ```bash .env
+    # Optional: Gemini model to use (default: gemini-2.5-flash)
+    GEMINI_MODEL=gemini-2.5-flash
+
+    # Optional: Seconds to wait between API calls (default: 1.0)
+    RATE_LIMIT_SECONDS=1.0
+
+    # Optional: Logging verbosity (default: INFO)
+    # Options: DEBUG, INFO, WARNING, ERROR, CRITICAL
+    LOG_LEVEL=INFO
+    ```
+  </Step>
+</Steps>
+
+### Available environment variables
+
+<ParamField path="GEMINI_API_KEY" type="string" required>
+  Your Google Gemini API key. Get one free at [Google AI Studio](https://aistudio.google.com/app/apikey).
+
+  The tool will fail to start without this key:
+  ```python
+  if not settings.gemini_api_key:
+      raise ValueError(
+          "GEMINI_API_KEY is required. Set it via environment variable or .env file"
+      )
+  ```
+</ParamField>
+
+<ParamField path="X_USERNAME" type="string" required>
+  Your X (Twitter) username, used to construct tweet URLs.
+
+  Example: If your profile is `https://x.com/johndoe`, use:
+  ```bash
+  X_USERNAME=johndoe
+  ```
+</ParamField>
+
+<ParamField path="GEMINI_MODEL" type="string" default="gemini-2.5-flash">
+  The Gemini model to use for analysis.
+
+  Recommended options:
+  - `gemini-2.5-flash` - Fast and cost-effective (recommended)
+  - `gemini-2.0-flash` - Slightly older version
+  - `gemini-1.5-pro` - More capable but slower
+
+  The model is used in `analyzer.py:76`:
+  ```python
+  response = self.client.models.generate_content(
+      model=self.model,
+      contents=prompt,
+      config=genai.types.GenerateContentConfigDict(response_mime_type="application/json"),
+  )
+  ```
+</ParamField>
+
+<ParamField path="RATE_LIMIT_SECONDS" type="float" default="1.0">
+  Minimum seconds to wait between API requests to Gemini.
+
+  Useful for:
+  - Avoiding rate limits (increase to 2.0 or higher)
+  - Reducing API costs (higher values = slower processing)
+  - Testing (decrease to 0.5 for faster local development)
+
+  Implementation in `analyzer.py:64-68`:
+  ```python
+  def _rate_limit(self) -> None:
+      elapsed = time.time() - self.last_request_time
+      if elapsed < self.min_request_interval:
+          time.sleep(self.min_request_interval - elapsed)
+      self.last_request_time = time.time()
+  ```
+</ParamField>
+
+<ParamField path="LOG_LEVEL" type="string" default="INFO">
+  Controls verbosity of console output.
+
+  Options:
+  - `DEBUG` - Detailed information for debugging
+  - `INFO` - General progress updates (recommended)
+  - `WARNING` - Only warnings and errors
+  - `ERROR` - Only error messages
+  - `CRITICAL` - Only critical failures
+
+  Set in `config.py:14-22`:
+  ```python
+  def configure_logging() -> None:
+      log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+      log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+      logging.basicConfig(
+          level=getattr(logging, log_level, logging.INFO),
+          format=log_format,
+          handlers=[logging.StreamHandler(sys.stdout)],
+      )
+  ```
+</ParamField>
+
+## Analysis criteria configuration
+
+The `config.json` file defines what makes a tweet "problematic". This file is optional - the tool uses sensible defaults if not provided.
+
+### Creating config.json
+
+Create a `config.json` file in your project root:
+
+<CodeGroup>
+
+```json config.json (Professional cleanup)
+{
+  "criteria": {
+    "forbidden_words": ["damn", "wtf", "hell"],
+    "topics_to_exclude": [
+      "Profanity or unprofessional language",
+      "Personal attacks or insults",
+      "Outdated political opinions"
+    ],
+    "tone_requirements": [
+      "Professional language only",
+      "Respectful communication"
+    ],
+    "additional_instructions": "Flag any content that could harm professional reputation"
+  }
+}
+```
+
+```json config.json (Crypto skeptic)
+{
+  "criteria": {
+    "forbidden_words": ["crypto", "NFT", "web3", "blockchain", "HODL"],
+    "topics_to_exclude": [
+      "Cryptocurrency promotion",
+      "NFT hype",
+      "Web3 speculation"
+    ],
+    "tone_requirements": [
+      "Evidence-based technology discussion",
+      "No financial speculation"
+    ],
+    "additional_instructions": "Remove all crypto-related content from my timeline"
+  }
+}
+```
+
+```json config.json (Political neutral)
+{
+  "criteria": {
+    "forbidden_words": [],
+    "topics_to_exclude": [
+      "Political opinions",
+      "Election commentary",
+      "Partisan content"
+    ],
+    "tone_requirements": [
+      "Non-partisan communication",
+      "Focus on technology and professional topics"
+    ],
+    "additional_instructions": "Keep technical content, remove political commentary"
+  }
+}
+```
+
+</CodeGroup>
+
+### Criteria fields
+
+<ParamField path="criteria.forbidden_words" type="string[]">
+  Exact words that trigger deletion (case-insensitive).
+
+  Example:
+  ```json
+  "forbidden_words": ["damn", "crypto", "wtf"]
+  ```
+
+  Used in prompt construction in `analyzer.py:113-115`:
+  ```python
+  if settings.criteria.forbidden_words:
+      words = ", ".join(settings.criteria.forbidden_words)
+      criteria_parts.append(f"Contains any of these words: {words}")
+  ```
+
+  <Note>
+    Forbidden words match exact words only. "crypto" matches "Crypto is great" but not "cryptocurrency".
+  </Note>
+</ParamField>
+
+<ParamField path="criteria.topics_to_exclude" type="string[]">
+  High-level content categories to flag. The AI interprets these broadly.
+
+  Example:
+  ```json
+  "topics_to_exclude": [
+    "Profanity or unprofessional language",
+    "Personal attacks or insults",
+    "Outdated political opinions"
+  ]
+  ```
+
+  Each topic becomes a numbered criterion in the AI prompt:
+  ```python
+  criteria_parts.extend(settings.criteria.topics_to_exclude)
+  criteria_list = "\n".join(f"{i + 1}. {c}" for i, c in enumerate(criteria_parts))
+  ```
+</ParamField>
+
+<ParamField path="criteria.tone_requirements" type="string[]">
+  Stylistic and tone-related rules for content.
+
+  Example:
+  ```json
+  "tone_requirements": [
+    "Professional language only",
+    "Respectful communication",
+    "No sarcasm or mockery"
+  ]
+  ```
+
+  These are added to the criteria list sent to the AI:
+  ```python
+  criteria_parts.extend(settings.criteria.tone_requirements)
+  ```
+</ParamField>
+
+<ParamField path="criteria.additional_instructions" type="string">
+  Free-form guidance for the AI analyzer.
+
+  Example:
+  ```json
+  "additional_instructions": "Be extra cautious with tweets from 2020-2021 during controversial periods"
+  ```
+
+  Appended to the prompt in `analyzer.py:119-121`:
+  ```python
+  additional = ""
+  if settings.criteria.additional_instructions:
+      additional = f"\n\nAdditional guidance: {settings.criteria.additional_instructions}"
+  ```
+</ParamField>
+
+### Default criteria
+
+If `config.json` doesn't exist, these defaults are used from `config.py:51-64`:
+
+```python
+def _default_criteria() -> Criteria:
+    return Criteria(
+        forbidden_words=[],
+        topics_to_exclude=[
+            "Profanity or unprofessional language",
+            "Personal attacks or insults",
+            "Outdated political opinions",
+        ],
+        tone_requirements=[
+            "Professional language only",
+            "Respectful communication",
+        ],
+        additional_instructions="Flag any content that could harm professional reputation",
+    )
+```
+
+## File paths configuration
+
+The tool uses predefined paths for data storage. These are hardcoded in `config.py:34-38` but can be modified:
+
+```python
+@dataclass
+class Settings:
+    tweets_archive_path: str = "data/tweets/tweets.json"
+    transformed_tweets_path: str = "data/tweets/transformed/tweets.csv"
+    checkpoint_path: str = "data/checkpoint.txt"
+    processed_results_path: str = "data/tweets/processed/results.csv"
+    base_twitter_url: str = "https://x.com"
+```
+
+<Info>
+  To change data paths, modify these values in `config.py` before running the tool.
+</Info>
+
+## Batch processing configuration
+
+The batch size controls how many tweets are processed before saving a checkpoint:
+
+```python
+batch_size: int = 10  # Process 10 tweets per batch
+```
+
+Trade-offs:
+- **Larger batches** (20-50): Faster processing, but longer recovery if interrupted
+- **Smaller batches** (5-10): More frequent checkpoints, safer for large datasets
+
+<Warning>
+  Batch size must be modified in `config.py:43`. There's no environment variable for this setting.
+</Warning>
+
+## Configuration loading order
+
+The tool loads configuration in this order (from `config.py:87-102`):
+
+<Steps>
+  <Step title="Load environment variables">
+    The `.env` file is loaded first:
+    ```python
+    from dotenv import load_dotenv
+    load_dotenv()
+    ```
+  </Step>
+
+  <Step title="Apply default criteria">
+    Default analysis criteria are set:
+    ```python
+    criteria = _default_criteria()
+    ```
+  </Step>
+
+  <Step title="Override with config.json">
+    If `config.json` exists, it overrides defaults:
+    ```python
+    if file_criteria := _load_config_file("config.json"):
+        criteria = file_criteria
+    ```
+  </Step>
+
+  <Step title="Create Settings object">
+    Final settings combine environment variables and criteria:
+    ```python
+    return Settings(
+        x_username=os.getenv("X_USERNAME", "iamuchihadan"),
+        gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
+        gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
+        rate_limit_seconds=float(os.getenv("RATE_LIMIT_SECONDS", "1.0")),
+        criteria=criteria,
+    )
+    ```
+  </Step>
+</Steps>
+
+## Validation and errors
+
+### Missing API key
+
+If `GEMINI_API_KEY` is not set, the analyzer fails immediately:
+
+```python
+if not settings.gemini_api_key:
+    raise ValueError(
+        "GEMINI_API_KEY is required. Set it via environment variable or .env file"
+    )
+```
+
+### Invalid config.json
+
+If `config.json` exists but has invalid JSON, the tool falls back to defaults:
+
+```python
+try:
+    with open(config_path, encoding="utf-8") as f:
+        data = json.load(f)
+except (OSError, json.JSONDecodeError):
+    return None  # Use default criteria
+```
+
+<Tip>
+  Test your `config.json` is valid JSON using:
+  ```bash
+  python -m json.tool config.json
+  ```
+</Tip>
+
+## Example: Complete configuration
+
+Here's a complete configuration setup:
+
+<CodeGroup>
+
+```bash .env
+GEMINI_API_KEY=AIzaSyDxxxxxxxxxxxxxxxxxxxxxxxxx
+X_USERNAME=johndoe
+GEMINI_MODEL=gemini-2.5-flash
+RATE_LIMIT_SECONDS=1.5
+LOG_LEVEL=INFO
+```
+
+```json config.json
+{
+  "criteria": {
+    "forbidden_words": [
+      "damn",
+      "wtf",
+      "crypto",
+      "NFT"
+    ],
+    "topics_to_exclude": [
+      "Profanity or unprofessional language",
+      "Personal attacks or insults",
+      "Outdated political opinions",
+      "Cryptocurrency speculation",
+      "Controversial hot takes"
+    ],
+    "tone_requirements": [
+      "Professional language only",
+      "Respectful communication",
+      "Evidence-based claims",
+      "No inflammatory rhetoric"
+    ],
+    "additional_instructions": "Flag any content that could harm my professional reputation as a software engineer. Be especially strict with tweets older than 2 years."
+  }
+}
+```
+
+</CodeGroup>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Extract tweets" icon="download" href="/guides/extracting-tweets">
+    Learn how to extract tweets from your X archive
+  </Card>
+  <Card title="Customize criteria" icon="sliders" href="/guides/criteria-customization">
+    Deep dive into criteria customization strategies
+  </Card>
+</CardGroup>

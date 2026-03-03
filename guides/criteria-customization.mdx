@@ -1,0 +1,729 @@
+---
+title: Criteria customization
+description: Master the art of defining custom analysis criteria to accurately identify tweets you want to delete
+---
+
+The quality of your tweet analysis depends entirely on how well you define your criteria. This guide covers advanced strategies for customizing your analysis rules.
+
+## Understanding criteria types
+
+The tool uses four types of criteria from `config.py:26-30`:
+
+```python
+@dataclass
+class Criteria:
+    additional_instructions: str = ""
+    forbidden_words: list[str] = field(default_factory=list)
+    topics_to_exclude: list[str] = field(default_factory=list)
+    tone_requirements: list[str] = field(default_factory=list)
+```
+
+Each type serves a different purpose:
+
+<CardGroup cols={2}>
+  <Card title="Forbidden words" icon="ban">
+    Exact string matching for specific words or phrases
+  </Card>
+  <Card title="Topics to exclude" icon="comments">
+    High-level content categories interpreted by AI
+  </Card>
+  <Card title="Tone requirements" icon="volume">
+    Stylistic and communication style rules
+  </Card>
+  <Card title="Additional instructions" icon="message">
+    Free-form guidance for edge cases
+  </Card>
+</CardGroup>
+
+## Forbidden words strategy
+
+### How it works
+
+Forbidden words trigger exact, case-insensitive matching. From `analyzer.py:113-115`:
+
+```python
+if settings.criteria.forbidden_words:
+    words = ", ".join(settings.criteria.forbidden_words)
+    criteria_parts.append(f"Contains any of these words: {words}")
+```
+
+### Use cases
+
+<Tabs>
+  <Tab title="Profanity filter">
+    Remove tweets with explicit language:
+
+    ```json config.json
+    {
+      "criteria": {
+        "forbidden_words": [
+          "damn",
+          "hell",
+          "wtf",
+          "shit",
+          "fuck"
+        ]
+      }
+    }
+    ```
+
+    <Warning>
+      This matches exact words only. "damn" matches "Damn!" but not "condemned".
+    </Warning>
+  </Tab>
+
+  <Tab title="Keyword removal">
+    Remove tweets about specific topics:
+
+    ```json config.json
+    {
+      "criteria": {
+        "forbidden_words": [
+          "crypto",
+          "NFT",
+          "web3",
+          "blockchain",
+          "HODL",
+          "wagmi",
+          "gm"
+        ]
+      }
+    }
+    ```
+
+    Great for removing buzzwords from a specific era.
+  </Tab>
+
+  <Tab title="Brand/product mentions">
+    Remove tweets mentioning competitors or past affiliations:
+
+    ```json config.json
+    {
+      "criteria": {
+        "forbidden_words": [
+          "CompanyX",
+          "ProductY",
+          "BrandZ"
+        ]
+      }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+### Best practices
+
+<Steps>
+  <Step title="Start with obvious terms">
+    Begin with clear-cut words you definitely want to remove:
+
+    ```json
+    "forbidden_words": ["wtf", "lmao", "yolo"]
+    ```
+  </Step>
+
+  <Step title="Test on a sample">
+    Run analysis on 50-100 tweets to see what gets caught:
+
+    ```bash
+    # Process first 100 tweets
+    python src/main.py analyze-tweets
+    # Stop after batch 10, review results
+    ```
+  </Step>
+
+  <Step title="Refine iteratively">
+    Add more words based on what you missed:
+
+    ```json
+    "forbidden_words": ["wtf", "lmao", "yolo", "omg", "smh"]
+    ```
+  </Step>
+
+  <Step title="Consider case variations">
+    You don't need case variations - matching is case-insensitive:
+
+    ```json
+    // ✅ Good
+    "forbidden_words": ["crypto"]
+
+    // ❌ Redundant
+    "forbidden_words": ["crypto", "Crypto", "CRYPTO"]
+    ```
+  </Step>
+</Steps>
+
+<Tip>
+  Keep forbidden words list under 50 items for optimal performance. For broader matching, use topics instead.
+</Tip>
+
+## Topics to exclude strategy
+
+### How it works
+
+Topics are interpreted contextually by the AI. From `analyzer.py:110`:
+
+```python
+criteria_parts.extend(settings.criteria.topics_to_exclude)
+```
+
+These become numbered criteria in the prompt:
+
+```
+1. Profanity or unprofessional language
+2. Personal attacks or insults
+3. Cryptocurrency speculation
+```
+
+### Effective topic definitions
+
+<AccordionGroup>
+  <Accordion title="Professional cleanup">
+    Remove content that damages professional image:
+
+    ```json config.json
+    {
+      "criteria": {
+        "topics_to_exclude": [
+          "Profanity or unprofessional language",
+          "Personal attacks or insults directed at individuals",
+          "Complaints about employers or coworkers",
+          "Excessive personal drama or venting",
+          "Controversial political statements",
+          "Inappropriate jokes or humor"
+        ]
+      }
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Political neutrality">
+    Remove all political content:
+
+    ```json config.json
+    {
+      "criteria": {
+        "topics_to_exclude": [
+          "Political opinions or election commentary",
+          "Partisan statements about political parties",
+          "Policy advocacy or activism",
+          "Government or political figure criticism",
+          "Political memes or jokes"
+        ]
+      }
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Technology focus">
+    Keep only technical/professional content:
+
+    ```json config.json
+    {
+      "criteria": {
+        "topics_to_exclude": [
+          "Non-technical personal updates",
+          "Entertainment or pop culture commentary",
+          "Sports opinions or fandom",
+          "Food, travel, or lifestyle content",
+          "General social media conversations"
+        ]
+      }
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Outdated opinions">
+    Remove content that doesn't reflect current views:
+
+    ```json config.json
+    {
+      "criteria": {
+        "topics_to_exclude": [
+          "Cryptocurrency or NFT enthusiasm from 2021-2022",
+          "Hot takes or strong opinions that I no longer hold",
+          "Technology predictions that proved incorrect",
+          "Trend-chasing or hype-driven content",
+          "Overly optimistic or pessimistic forecasts"
+        ]
+      }
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### Writing effective topic descriptions
+
+<Steps>
+  <Step title="Be specific">
+    ❌ Bad: "Bad tweets"  
+    ✅ Good: "Tweets containing personal attacks on individuals"
+  </Step>
+
+  <Step title="Use action-oriented language">
+    ❌ Bad: "Politics"  
+    ✅ Good: "Political opinions or partisan statements"
+  </Step>
+
+  <Step title="Provide context">
+    ❌ Bad: "Old content"  
+    ✅ Good: "Technology predictions from before 2020 that proved incorrect"
+  </Step>
+
+  <Step title="Avoid ambiguity">
+    ❌ Bad: "Weird stuff"  
+    ✅ Good: "Unprofessional humor or inappropriate jokes"
+  </Step>
+</Steps>
+
+## Tone requirements strategy
+
+### How it works
+
+Tone requirements define stylistic standards. From `analyzer.py:111`:
+
+```python
+criteria_parts.extend(settings.criteria.tone_requirements)
+```
+
+### Effective tone rules
+
+<CodeGroup>
+
+```json Professional standard
+{
+  "criteria": {
+    "tone_requirements": [
+      "Professional and courteous language only",
+      "Respectful disagreement without personal attacks",
+      "Evidence-based claims with sources when possible",
+      "Constructive criticism rather than negativity",
+      "Thoughtful communication, not reactive hot takes"
+    ]
+  }
+}
+```
+
+```json Casual to professional shift
+{
+  "criteria": {
+    "tone_requirements": [
+      "No excessive slang or internet speak",
+      "Complete sentences with proper grammar",
+      "Avoid all-caps or excessive punctuation",
+      "No sarcasm or mockery of others",
+      "Serious topics discussed seriously, not flippantly"
+    ]
+  }
+}
+```
+
+```json Technical focus
+{
+  "criteria": {
+    "tone_requirements": [
+      "Technical accuracy and precision",
+      "Objective analysis over emotional reactions",
+      "Nuanced takes rather than absolute statements",
+      "Acknowledgment of complexity and trade-offs",
+      "Educational or informative content"
+    ]
+  }
+}
+```
+
+</CodeGroup>
+
+### Tone vs. topic
+
+<Tabs>
+  <Tab title="Use topics for WHAT">
+    What the tweet is about:
+
+    ```json
+    "topics_to_exclude": [
+      "Cryptocurrency speculation",  // WHAT: The subject matter
+      "Political opinions"            // WHAT: The content type
+    ]
+    ```
+  </Tab>
+
+  <Tab title="Use tone for HOW">
+    How the tweet is written:
+
+    ```json
+    "tone_requirements": [
+      "Respectful communication",     // HOW: Manner of expression
+      "Evidence-based claims"         // HOW: Style of argumentation
+    ]
+    ```
+  </Tab>
+</Tabs>
+
+## Additional instructions strategy
+
+### How it works
+
+Free-form guidance for the AI. From `analyzer.py:119-121`:
+
+```python
+additional = ""
+if settings.criteria.additional_instructions:
+    additional = f"\n\nAdditional guidance: {settings.criteria.additional_instructions}"
+```
+
+### Effective uses
+
+<AccordionGroup>
+  <Accordion title="Temporal filtering">
+    Target content from specific time periods:
+
+    ```json
+    "additional_instructions": "Be especially strict with tweets from 2020-2021 during the pandemic and crypto boom. Content from this period often doesn't reflect my current views."
+    ```
+  </Accordion>
+
+  <Accordion title="Threshold guidance">
+    Set the bar for deletion:
+
+    ```json
+    "additional_instructions": "When in doubt, mark for deletion. I prefer a clean timeline over preserving borderline content. Err on the side of caution."
+    ```
+
+    Or the opposite:
+
+    ```json
+    "additional_instructions": "Only flag tweets that are clearly problematic. Preserve content unless it strongly violates criteria. When uncertain, keep it."
+    ```
+  </Accordion>
+
+  <Accordion title="Context-specific rules">
+    Handle special cases:
+
+    ```json
+    "additional_instructions": "Technical tweets about blockchain technology are fine - only flag cryptocurrency speculation or financial advice. Distinguish between technology discussion and hype."
+    ```
+  </Accordion>
+
+  <Accordion title="Reputation focus">
+    Emphasize the goal:
+
+    ```json
+    "additional_instructions": "Focus on professional reputation protection. Would a future employer, client, or colleague be concerned by this tweet? If yes, flag it."
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Complete examples by use case
+
+### Professional branding
+
+For consultants, job seekers, or public figures:
+
+```json config.json
+{
+  "criteria": {
+    "forbidden_words": [
+      "damn", "hell", "wtf", "crap", "sucks"
+    ],
+    "topics_to_exclude": [
+      "Profanity or unprofessional language",
+      "Personal attacks on individuals or companies",
+      "Complaints about employers or coworkers",
+      "Controversial political or religious opinions",
+      "Excessive personal drama or life updates",
+      "Inappropriate jokes or off-color humor"
+    ],
+    "tone_requirements": [
+      "Professional and courteous language",
+      "Respectful disagreement without insults",
+      "Constructive rather than purely critical",
+      "Thoughtful analysis over hot takes"
+    ],
+    "additional_instructions": "Flag any content that could negatively impact professional opportunities. Would I want a hiring manager or client to see this? If no, delete it."
+  }
+}
+```
+
+### Technology focus
+
+For developers focusing on technical content:
+
+```json config.json
+{
+  "criteria": {
+    "forbidden_words": [
+      "crypto", "NFT", "web3", "HODL", "wagmi", "gm"
+    ],
+    "topics_to_exclude": [
+      "Cryptocurrency or NFT speculation",
+      "Non-technical personal life updates",
+      "Political opinions unrelated to technology policy",
+      "Sports, entertainment, or pop culture",
+      "Food, travel, or lifestyle content",
+      "Clickbait or engagement-bait posts"
+    ],
+    "tone_requirements": [
+      "Technical accuracy and precision",
+      "Objective analysis over emotional reactions",
+      "Nuanced discussion of trade-offs",
+      "Educational or informative content",
+      "Professional communication standards"
+    ],
+    "additional_instructions": "Keep only tweets about software development, technology, engineering, or related professional topics. Remove everything else to maintain a focused technical profile."
+  }
+}
+```
+
+### Political neutrality
+
+For removing all political content:
+
+```json config.json
+{
+  "criteria": {
+    "forbidden_words": [],
+    "topics_to_exclude": [
+      "Political opinions or partisan statements",
+      "Election commentary or predictions",
+      "Policy advocacy or activism",
+      "Criticism of political figures or parties",
+      "Social issues with political dimensions",
+      "Government actions or legislation commentary"
+    ],
+    "tone_requirements": [
+      "Non-partisan communication",
+      "Objective analysis over opinion",
+      "Professional neutrality maintained"
+    ],
+    "additional_instructions": "Remove all political content regardless of viewpoint. Keep technology, professional, and neutral educational content only."
+  }
+}
+```
+
+### Era cleanup
+
+For removing content from a specific period:
+
+```json config.json
+{
+  "criteria": {
+    "forbidden_words": [
+      "COVID", "pandemic", "quarantine", "lockdown",
+      "crypto", "NFT", "web3", "metaverse"
+    ],
+    "topics_to_exclude": [
+      "COVID-19 or pandemic-related hot takes",
+      "Cryptocurrency or NFT enthusiasm",
+      "Predictions about web3 or metaverse",
+      "Work-from-home lifestyle tweets",
+      "Quarantine or lockdown content",
+      "Technology hype from 2020-2022 that aged poorly"
+    ],
+    "tone_requirements": [
+      "Timeless content that remains relevant",
+      "Measured opinions rather than reactive takes",
+      "Evidence-based rather than speculative"
+    ],
+    "additional_instructions": "Focus on removing dated content from 2020-2022 that was reactive to temporary circumstances or speculative hype cycles. Preserve evergreen technical and professional content."
+  }
+}
+```
+
+## Testing and iteration
+
+### Start with a test set
+
+<Steps>
+  <Step title="Create a small sample">
+    Extract your full archive but only analyze a sample:
+
+    ```bash
+    # Extract all tweets
+    python src/main.py extract-tweets
+
+    # Edit checkpoint to stop early
+    echo "50" > data/checkpoint.txt
+
+    # Analyze first 50 tweets
+    python src/main.py analyze-tweets
+    ```
+  </Step>
+
+  <Step title="Review results">
+    Check what was flagged:
+
+    ```bash
+    # See all flagged tweets
+    cat data/tweets/processed/results.csv
+
+    # Open each URL in browser and review
+    ```
+  </Step>
+
+  <Step title="Adjust criteria">
+    Based on results:
+    - **Too many false positives**: Make criteria more specific
+    - **Missing obvious deletions**: Add forbidden words or topics
+    - **Borderline cases**: Refine tone requirements or add additional instructions
+  </Step>
+
+  <Step title="Reset and retry">
+    Clear results and retest:
+
+    ```bash
+    # Remove previous results
+    rm data/tweets/processed/results.csv
+    rm data/checkpoint.txt
+
+    # Test again with updated config
+    python src/main.py analyze-tweets
+    ```
+  </Step>
+</Steps>
+
+### Iteration checklist
+
+<Tabs>
+  <Tab title="Too aggressive (over-flagging)">
+    If the tool flags too many tweets:
+
+    - [ ] Remove overly broad topics
+    - [ ] Make tone requirements more specific
+    - [ ] Add "only flag if clearly problematic" to additional instructions
+    - [ ] Review forbidden words for common false positives
+    - [ ] Test with smaller word list
+  </Tab>
+
+  <Tab title="Too lenient (under-flagging)">
+    If the tool misses obvious deletions:
+
+    - [ ] Add more forbidden words from missed tweets
+    - [ ] Create more specific topic categories
+    - [ ] Strengthen tone requirements
+    - [ ] Add "when in doubt, flag it" to additional instructions
+    - [ ] Review missed tweets for patterns
+  </Tab>
+
+  <Tab title="Inconsistent results">
+    If similar tweets get different decisions:
+
+    - [ ] Make criteria more specific and unambiguous
+    - [ ] Provide examples in additional instructions
+    - [ ] Reduce overlapping topics
+    - [ ] Test same criteria multiple times (AI can be non-deterministic)
+  </Tab>
+</Tabs>
+
+<Warning>
+  AI analysis has inherent variability. Running the same tweet twice might yield different results. Focus on overall patterns, not individual edge cases.
+</Warning>
+
+## Advanced techniques
+
+### Tiered criteria sets
+
+Create multiple config files for different passes:
+
+```bash
+# First pass: Obvious deletions
+mv config.json config-aggressive.json
+python src/main.py analyze-tweets
+
+# Second pass: Borderline content
+mv config-aggressive.json config-backup.json
+mv config-moderate.json config.json
+rm data/checkpoint.txt  # Start over
+python src/main.py analyze-tweets
+```
+
+### Negative testing
+
+Test what doesn't get flagged:
+
+```python
+# After analysis, find tweets NOT in results
+import pandas as pd
+
+all_tweets = pd.read_csv('data/tweets/transformed/tweets.csv')
+flagged = pd.read_csv('data/tweets/processed/results.csv')
+
+# Extract IDs from URLs in flagged tweets
+flagged['id'] = flagged['tweet_url'].str.split('/').str[-1]
+
+kept = all_tweets[~all_tweets['id'].isin(flagged['id'])]
+print(f"Kept {len(kept)} tweets")
+print(kept.sample(20))  # Review random kept tweets
+```
+
+### A/B testing criteria
+
+Compare different criteria configurations:
+
+1. Run analysis with Config A, save results as `results-a.csv`
+2. Delete checkpoint and results
+3. Run analysis with Config B, save results as `results-b.csv`  
+4. Compare which tweets differ between configurations
+
+## Common pitfalls
+
+<AccordionGroup>
+  <Accordion title="Overly broad forbidden words">
+    ❌ Problem: Adding "fire" removes "fired up about this project"  
+    ✅ Solution: Use topics for contextual matching instead
+
+    ```json
+    // ❌ Don't do this
+    "forbidden_words": ["fire", "kill", "dead"]
+
+    // ✅ Do this instead
+    "topics_to_exclude": ["Violent or aggressive language"]
+    ```
+  </Accordion>
+
+  <Accordion title="Redundant criteria">
+    ❌ Problem: Same concept repeated multiple ways
+
+    ```json
+    "topics_to_exclude": [
+      "Political opinions",
+      "Political statements",  // Redundant
+      "Politics",              // Redundant
+      "Partisan content"       // Redundant
+    ]
+    ```
+
+    ✅ Solution: Consolidate to one clear description
+
+    ```json
+    "topics_to_exclude": [
+      "Political opinions or partisan statements"
+    ]
+    ```
+  </Accordion>
+
+  <Accordion title="Vague additional instructions">
+    ❌ Problem: Instructions too open to interpretation
+
+    ```json
+    "additional_instructions": "Delete bad tweets"
+    ```
+
+    ✅ Solution: Be specific about what "bad" means
+
+    ```json
+    "additional_instructions": "Flag any content that could harm my professional reputation as a software engineer, including unprofessional language, controversial opinions, or outdated technical takes"
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Run analysis" icon="brain" href="/guides/analyzing-tweets">
+    Apply your custom criteria to analyze tweets
+  </Card>
+  <Card title="Resume analysis" icon="rotate" href="/guides/resume-interrupted-analysis">
+    Learn about checkpoints for long-running analyses
+  </Card>
+</CardGroup>

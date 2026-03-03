@@ -1,0 +1,312 @@
+---
+title: Architecture overview
+description: High-level architecture of the Tweet Audit Tool CLI, including design principles and system layers
+---
+
+The Tweet Audit Tool CLI follows a **three-layer architecture** that prioritizes reliability, simplicity, and maintainability over raw performance. This design makes the tool easy to understand, debug, and extend while ensuring progress is never lost.
+
+## System layers
+
+The architecture separates concerns into three distinct layers:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                        CLI Layer                             │
+│                     (main.py)                                │
+│  • User commands: extract-tweets, analyze-tweets            │
+│  • Error handling and user feedback                         │
+└────────────────┬────────────────────────────────────────────┘
+                 │
+┌────────────────▼────────────────────────────────────────────┐
+│                   Application Layer                          │
+│                  (application.py)                            │
+│  • Orchestrates workflow (extract → analyze)                │
+│  • Manages checkpoint/resume logic                          │
+│  • Coordinates storage and analyzer                         │
+└────┬───────────────────────────┬──────────────────────────┬─┘
+     │                           │                          │
+┌────▼─────────┐    ┌───────────▼──────────┐    ┌─────────▼────────┐
+│   Storage    │    │      Analyzer        │    │     Config       │
+│ (storage.py) │    │   (analyzer.py)      │    │   (config.py)    │
+│              │    │                      │    │                  │
+│ • JSON parse │    │ • Gemini AI client   │    │ • Load .env      │
+│ • CSV I/O    │    │ • Prompt building    │    │ • Load criteria  │
+│ • Checkpoint │    │ • Rate limiting      │    │ • Settings       │
+└──────────────┘    └──────────────────────┘    └──────────────────┘
+```
+
+### CLI layer (main.py)
+
+The **presentation layer** handles user interaction:
+
+- Parses command-line arguments
+- Delegates work to the application layer
+- Formats results for human consumption
+- Manages exit codes
+
+<Info>
+The CLI layer is deliberately thin - it contains no business logic. This allows the application layer to be reused in other contexts (web API, GUI, automated pipeline) without modification.
+</Info>
+
+### Application layer (application.py)
+
+The **orchestration layer** contains business logic:
+
+- Coordinates between storage and analyzer components
+- Implements checkpoint/resume workflow
+- Handles batch processing
+- Manages error recovery
+
+### Infrastructure layer
+
+The **foundation layer** provides specialized services:
+
+- **Storage** (storage.py): File operations (JSON parsing, CSV I/O, checkpointing)
+- **Analyzer** (analyzer.py): AI integration (Gemini client, prompt engineering, rate limiting)
+- **Config** (config.py): Configuration management (environment variables, criteria loading)
+- **Models** (models.py): Data structures (Tweet, AnalysisResult, Decision)
+
+## Core design principles
+
+### Separation of concerns
+
+Each module has a **single responsibility**:
+
+<CodeGroup>
+```python models.py
+# Data structures only - no logic
+@dataclass(frozen=True)
+class Tweet:
+    id: str
+    content: str
+```
+
+```python storage.py
+# File operations only - no AI logic
+class CSVWriter:
+    def write_tweets(self, tweets: list[Tweet]):
+        # Handle CSV serialization
+```
+
+```python analyzer.py  
+# AI interaction only - no file I/O
+class Gemini:
+    def analyze(self, tweet: Tweet) -> AnalysisResult:
+        # Call Gemini API
+```
+</CodeGroup>
+
+**Benefits:**
+- Easy to test (mock one layer without affecting others)
+- Easy to swap implementations (e.g., switch AI providers)
+- Easy to understand (clear boundaries between components)
+
+### Fail-safe defaults
+
+The tool prioritizes **not losing progress** over speed:
+
+- Checkpoints after every batch (default: 10 tweets)
+- Conservative rate limiting (1 req/sec default)
+- Retry logic for transient failures
+- All-or-nothing batch processing
+
+<Note>
+**Trade-off:** Slower execution, but you can interrupt (Ctrl+C) anytime and resume exactly where you left off.
+</Note>
+
+For 5,000 tweets at 1 req/sec = ~1.5 hours, but with guaranteed progress preservation.
+
+### Sequential processing
+
+Processes tweets **one at a time** (with batching for checkpoints), not concurrently.
+
+**Why sequential?**
+- Natural rate limiting (no complex throttling needed)
+- Simple error handling (one failure = pause and preserve state)
+- Predictable behavior (easier debugging)
+- Lower memory usage
+
+<Note>
+**Trade-off:** Takes longer than parallel processing. Concurrent processing would be 5-10x faster but adds retry coordination, partial failure handling, and complex state management.
+</Note>
+
+## Technology choices
+
+### Python
+
+**Why Python?**
+- Fast prototyping and iteration
+- First-class AI/ML library support
+- Google's `generativeai` SDK is Python-native
+- Dynamic typing simplifies prompt engineering experiments
+
+**Trade-offs:**
+- Runtime performance overhead
+- Dependency management complexity (Poetry required)
+- No single-binary distribution
+
+### CSV for storage
+
+**Why CSV instead of database?**
+- Simpler deployment (no DB setup required)
+- Human-readable output (open in Excel/Google Sheets)
+- Easy to version control or share
+- Sufficient for typical dataset size (up to 100K tweets)
+
+**Trade-offs:**
+- No query capabilities
+- Must load entire file to read
+- Limited type safety
+
+### Immutable data structures
+
+All data models use `@dataclass(frozen=True)`:
+
+```python
+@dataclass(frozen=True)
+class Tweet:
+    id: str
+    content: str
+```
+
+**Benefits:**
+- Prevents accidental modification
+- Makes bugs obvious (crash instead of silent corruption)
+- Thread-safe by design
+- Easier to reason about data flow
+
+## Execution model
+
+The tool runs as a **long-running process** that completes all batches in one execution:
+
+```
+Start → Load checkpoint → Process batch → Save checkpoint → Repeat → Done
+         ↑                                      │
+         └──────────────────────────────────────┘
+              (Resume from checkpoint on restart)
+```
+
+**Benefits:**
+- Simple for users (no cron jobs or manual re-runs)
+- Automatic resume on interruption
+- Single execution context (easier debugging)
+
+**Trade-offs:**
+- Longer-running processes (harder to monitor)
+- Can't schedule batches with different resource constraints
+- No built-in distributed processing
+
+## Error handling philosophy
+
+Three-tier error handling strategy:
+
+### 1. Retry at boundary (Analyzer)
+
+Transient API errors get automatic retry with exponential backoff:
+
+```python
+@retry_with_backoff(max_retries=3, initial_delay=1.0)
+def analyze(self, tweet: Tweet) -> AnalysisResult:
+    # Retry on timeout, rate limit, 503, etc.
+```
+
+### 2. Graceful degradation (Application)
+
+- Single tweet failure → abort batch, preserve checkpoint
+- File errors → return error Result, don't crash
+- Empty tweet list → success with count=0
+
+### 3. User feedback (CLI)
+
+- Success → positive message + count
+- Failure → error message + appropriate exit code
+- No silent failures
+
+## Security considerations
+
+### Secrets management
+
+- API keys stored in `.env` (gitignored)
+- No secrets in code or `config.json`
+- Validation on first use (fail fast)
+
+### File permissions
+
+All files created with restrictive permissions:
+
+```python
+PRIVATE_FILE_MODE = 0o600  # Owner read/write only
+PRIVATE_DIR_MODE = 0o750   # Owner rwx, group rx
+```
+
+**Why?** Your tweets are personal data. These permissions prevent other users on shared systems from reading your content.
+
+### Data privacy
+
+- All processing is local (tweets never sent elsewhere except Gemini API)
+- Results stored locally (you control deletion)
+- No analytics or telemetry
+- No external dependencies beyond Gemini API
+
+## Performance characteristics
+
+### Time complexity
+
+- **Extract:** O(n) - read JSON once, write CSV once
+- **Analyze:** O(n) - one API call per tweet
+
+### Space complexity
+
+- **Extract:** O(n) - must hold all tweets in memory
+- **Analyze:** O(batch_size) - only current batch in memory
+
+### Bottlenecks
+
+**API latency** (500-2000ms per request)
+- Cannot be eliminated (external API constraint)
+- Mitigated by batch checkpoints (pause/resume anytime)
+
+**Network reliability**
+- Handled by retry logic with exponential backoff
+- Checkpoint mechanism preserves progress
+
+**Memory** (for huge archives >1M tweets)
+- Current implementation loads all tweets for analysis
+- Could be improved with streaming CSV parser (future enhancement)
+
+## Scalability limits
+
+<Accordion title="Works well for">
+- 1,000 - 50,000 tweets
+- Single user on laptop/desktop
+- Gemini free tier API limits (15 RPM)
+- Occasional cleanup tasks
+</Accordion>
+
+<Accordion title="Struggles with">
+- 100,000+ tweets (hours of processing)
+- Multiple concurrent users (no concurrency support)
+- Real-time requirements (sequential = slow)
+- High-throughput scenarios (1 req/sec max by default)
+</Accordion>
+
+<Accordion title="To scale beyond these limits">
+- Implement async/await for concurrent API calls
+- Use Redis for distributed checkpoints
+- Deploy as microservice with job queue
+- Use batch API if available from provider
+</Accordion>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Component details" icon="cubes" href="/architecture/components">
+    Deep dive into each module's responsibilities and implementation
+  </Card>
+  <Card title="Data flow" icon="arrow-right-arrow-left" href="/architecture/data-flow">
+    Understand how data moves through the system
+  </Card>
+  <Card title="Design decisions" icon="lightbulb" href="/architecture/design-decisions">
+    Learn about key trade-offs and why they were made
+  </Card>
+</CardGroup>

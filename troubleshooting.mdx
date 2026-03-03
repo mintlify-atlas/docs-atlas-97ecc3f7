@@ -1,0 +1,426 @@
+---
+title: Troubleshooting
+description: Common errors and solutions for the Tweet Audit Tool
+---
+
+## Common errors
+
+This page covers the most common issues you might encounter when using the Tweet Audit Tool and how to resolve them.
+
+### Environment and configuration errors
+
+<AccordionGroup>
+  <Accordion title="GEMINI_API_KEY is required">
+    **Error message:**
+    ```
+    GEMINI_API_KEY is required. Set it via environment variable or .env file
+    ```
+
+    **Cause:** The tool cannot find your Gemini API key in the environment.
+
+    **Solution:**
+    
+    <Steps>
+      <Step title="Create .env file">
+        Create a `.env` file in your project root if it doesn't exist:
+        ```bash
+        touch .env
+        ```
+      </Step>
+      
+      <Step title="Add your API key">
+        Add your Gemini API key to the `.env` file:
+        ```bash
+        GEMINI_API_KEY=your_actual_api_key_here
+        X_USERNAME=your_x_username
+        ```
+      </Step>
+      
+      <Step title="Get an API key">
+        If you don't have an API key yet, get one from [Google AI Studio](https://aistudio.google.com/app/apikey)
+      </Step>
+    </Steps>
+
+    <Note>
+      Make sure there are no spaces around the `=` sign and no quotes around the key value.
+    </Note>
+  </Accordion>
+
+  <Accordion title="Tweet archive not found">
+    **Error message:**
+    ```
+    Tweet archive not found: data/tweets/tweets.json
+    ```
+
+    **Cause:** The tool cannot find your Twitter archive file in the expected location.
+
+    **Solution:**
+    
+    <Steps>
+      <Step title="Request your archive">
+        If you haven't already, request your archive from X:
+        - Go to X.com → More → Settings and Privacy → Your Account
+        - Click "Download an archive of your data"
+        - Wait 24-48 hours for the email
+      </Step>
+      
+      <Step title="Extract the archive">
+        Download and extract the ZIP file you receive from X
+      </Step>
+      
+      <Step title="Copy to correct location">
+        Create the directory and copy the tweets file:
+        ```bash
+        mkdir -p data/tweets
+        cp /path/to/your/archive/data/tweets.json data/tweets/tweets.json
+        ```
+      </Step>
+    </Steps>
+  </Accordion>
+
+  <Accordion title="Corrupted checkpoint file">
+    **Error message:**
+    ```
+    Corrupted checkpoint file data/checkpoint.txt: expected integer, got '...'
+    ```
+
+    **Cause:** The checkpoint file that tracks progress has become corrupted.
+
+    **Solution:**
+    
+    Simply delete the checkpoint file and restart:
+    ```bash
+    rm data/checkpoint.txt
+    python src/main.py analyze-tweets
+    ```
+
+    <Warning>
+      Deleting the checkpoint will restart the analysis from the beginning. Any previously analyzed tweets will need to be re-analyzed.
+    </Warning>
+  </Accordion>
+</AccordionGroup>
+
+### File format errors
+
+<AccordionGroup>
+  <Accordion title="Missing required column: id">
+    **Error message:**
+    ```
+    Missing required column 'id' in data/tweets/transformed/tweets.csv
+    ```
+
+    **Cause:** The transformed CSV file is corrupted or incomplete.
+
+    **Solution:**
+    
+    Delete the corrupted CSV and re-extract tweets from the archive:
+    ```bash
+    rm data/tweets/transformed/tweets.csv
+    python src/main.py extract-tweets
+    ```
+  </Accordion>
+
+  <Accordion title="Invalid JSON in archive">
+    **Error message:**
+    ```
+    Invalid JSON in data/tweets/tweets.json: ...
+    ```
+
+    **Cause:** The Twitter archive JSON file is malformed or incomplete.
+
+    **Solution:**
+    
+    <Steps>
+      <Step title="Verify the download">
+        Re-download your Twitter archive from the email link
+      </Step>
+      
+      <Step title="Extract completely">
+        Ensure the ZIP file is fully extracted without errors
+      </Step>
+      
+      <Step title="Copy again">
+        Copy the tweets.json file again:
+        ```bash
+        cp /path/to/archive/data/tweets.json data/tweets/tweets.json
+        ```
+      </Step>
+    </Steps>
+  </Accordion>
+
+  <Accordion title="Missing required field in archive">
+    **Error message:**
+    ```
+    Missing required field 'id_str' in data/tweets/tweets.json.
+    Expected format: [{'tweet': {'id_str': '...', 'full_text': '...'}}]
+    ```
+
+    **Cause:** The archive file format doesn't match the expected Twitter export structure.
+
+    **Solution:**
+    
+    Ensure you're using the official Twitter/X archive export:
+    - The file should come from X.com's "Download an archive of your data" feature
+    - The JSON should contain a list of objects with a `tweet` key
+    - Each tweet should have `id_str` and `full_text` fields
+
+    <Info>
+      If you're using an old archive format, you may need to request a fresh archive export from X.
+    </Info>
+  </Accordion>
+
+  <Accordion title="Invalid CSV format">
+    **Error message:**
+    ```
+    Invalid CSV format in data/tweets/transformed/tweets.csv: ...
+    ```
+
+    **Cause:** The CSV file has formatting issues.
+
+    **Solution:**
+    
+    Re-extract tweets to regenerate the CSV:
+    ```bash
+    rm -rf data/tweets/transformed/
+    python src/main.py extract-tweets
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### API and analysis errors
+
+<AccordionGroup>
+  <Accordion title="Rate limit errors (429)">
+    **Error message:**
+    ```
+    429 rate limit exceeded
+    ```
+
+    **Cause:** You're hitting Gemini API rate limits.
+
+    **Solution:**
+    
+    The tool automatically retries with exponential backoff, but you can also:
+
+    <Steps>
+      <Step title="Increase delay">
+        Add or adjust `RATE_LIMIT_SECONDS` in your `.env`:
+        ```bash
+        RATE_LIMIT_SECONDS=2.0
+        ```
+      </Step>
+      
+      <Step title="Wait and resume">
+        The tool saves progress automatically. Wait a few minutes and run again:
+        ```bash
+        python src/main.py analyze-tweets
+        ```
+      </Step>
+      
+      <Step title="Check your quota">
+        Visit [Google AI Studio](https://aistudio.google.com) to check your API quota limits
+      </Step>
+    </Steps>
+
+    <Info>
+      Gemini 2.5 Flash free tier: 15 requests per minute, 1,500 per day. For large tweet volumes, spread analysis over multiple days.
+    </Info>
+  </Accordion>
+
+  <Accordion title="Empty response from Gemini">
+    **Error message:**
+    ```
+    Empty response from Gemini for tweet 1234567890
+    ```
+
+    **Cause:** The API returned no content for a specific tweet.
+
+    **Solution:**
+    
+    This is usually a transient error. The tool will:
+    1. Automatically retry up to 3 times with exponential backoff
+    2. If it continues failing, the tweet may contain content that Gemini cannot process
+
+    You can resume analysis after checking the logs:
+    ```bash
+    python src/main.py analyze-tweets
+    ```
+  </Accordion>
+
+  <Accordion title="Invalid Gemini response format">
+    **Error message:**
+    ```
+    Invalid Gemini response for tweet 1234567890: ...
+    Missing decision field in Gemini response for tweet 1234567890: ...
+    Invalid decision value from Gemini for tweet 1234567890: ...
+    ```
+
+    **Cause:** Gemini returned a response in an unexpected format.
+
+    **Solution:**
+    
+    This indicates an issue with the AI model's output format. Try:
+
+    <Steps>
+      <Step title="Check your model">
+        Verify you're using a supported model in `.env`:
+        ```bash
+        GEMINI_MODEL=gemini-2.5-flash
+        ```
+      </Step>
+      
+      <Step title="Retry analysis">
+        The tool will resume from the last successful checkpoint:
+        ```bash
+        python src/main.py analyze-tweets
+        ```
+      </Step>
+      
+      <Step title="Check API status">
+        If the issue persists, check [Google Cloud Status](https://status.cloud.google.com/) for API outages
+      </Step>
+    </Steps>
+  </Accordion>
+
+  <Accordion title="Connection and timeout errors">
+    **Error messages:**
+    ```
+    Connection timeout
+    Connection error
+    503 Service temporarily unavailable
+    ```
+
+    **Cause:** Network issues or temporary API unavailability.
+
+    **Solution:**
+    
+    The tool automatically retries with exponential backoff for:
+    - Timeouts
+    - Connection errors
+    - Rate limits (429)
+    - Service unavailable (503)
+    - Quota errors
+
+    If errors persist:
+    1. Check your internet connection
+    2. Wait a few minutes and resume analysis
+    3. The checkpoint system ensures you don't lose progress
+  </Accordion>
+</AccordionGroup>
+
+### Permission errors
+
+<AccordionGroup>
+  <Accordion title="Permission denied">
+    **Error message:**
+    ```
+    Permission denied: data/tweets/processed/results.csv
+    ```
+
+    **Cause:** The tool cannot write to the output directory due to file permissions.
+
+    **Solution:**
+    
+    <Steps>
+      <Step title="Check directory permissions">
+        Ensure you have write access to the data directory:
+        ```bash
+        ls -la data/
+        ```
+      </Step>
+      
+      <Step title="Fix permissions">
+        If needed, update permissions:
+        ```bash
+        chmod -R u+w data/
+        ```
+      </Step>
+      
+      <Step title="Check disk space">
+        Ensure you have sufficient disk space:
+        ```bash
+        df -h .
+        ```
+      </Step>
+    </Steps>
+  </Accordion>
+</AccordionGroup>
+
+## Analysis quality issues
+
+### Gemini returns "KEEP" for everything
+
+**Symptom:** The analysis completes but no tweets are flagged for deletion, even though you expected some to be flagged.
+
+**Cause:** Your criteria might be too lenient or not specific enough.
+
+**Solution:**
+
+<Steps>
+  <Step title="Review your criteria">
+    Open `config.json` and examine your criteria settings
+  </Step>
+  
+  <Step title="Add forbidden words">
+    Include specific words that should trigger deletion:
+    ```json
+    "forbidden_words": ["damn", "wtf", "crypto", "NFT"]
+    ```
+  </Step>
+  
+  <Step title="Be more specific with topics">
+    Make your `topics_to_exclude` more detailed:
+    ```json
+    "topics_to_exclude": [
+      "Profanity or unprofessional language",
+      "Personal attacks or insults directed at individuals",
+      "Political opinions from 2020-2021",
+      "Cryptocurrency or NFT promotion"
+    ]
+    ```
+  </Step>
+  
+  <Step title="Add stronger instructions">
+    Provide clearer guidance:
+    ```json
+    "additional_instructions": "Be aggressive in flagging content. Flag anything that could be seen as unprofessional by a potential employer or client."
+    ```
+  </Step>
+  
+  <Step title="Test on a sample">
+    Before re-running on all tweets:
+    1. Create a small test archive with 5-10 known problematic tweets
+    2. Run the analysis
+    3. Verify the results match your expectations
+    4. Adjust criteria as needed
+  </Step>
+  
+  <Step title="Reset and re-analyze">
+    Once criteria are refined, restart:
+    ```bash
+    rm data/checkpoint.txt
+    rm data/tweets/processed/results.csv
+    python src/main.py analyze-tweets
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+  Deleting the checkpoint and results file will restart the analysis from scratch. This will use additional API quota.
+</Warning>
+
+## Getting help
+
+If you encounter an error not listed here:
+
+1. **Check the logs**: Set `LOG_LEVEL=DEBUG` in your `.env` for detailed logging
+2. **Search existing issues**: Check the [GitHub issues](https://github.com/DanielPopoola/tweet-audit-impl/issues)
+3. **Report a bug**: Open a new issue with:
+   - The full error message
+   - Your Python version (`python --version`)
+   - Steps to reproduce
+   - Relevant log output (with sensitive data removed)
+
+<Info>
+  Remember to never share your actual API keys or personal tweet content when reporting issues.
+</Info>

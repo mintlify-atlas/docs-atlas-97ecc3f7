@@ -1,0 +1,407 @@
+---
+title: Installation
+description: Set up Tweet Audit Tool with prerequisites, dependencies, and environment configuration
+---
+
+## Prerequisites
+
+Before installing Tweet Audit Tool, ensure you have the following:
+
+<Steps>
+  <Step title="Python 3.12 or higher">
+    Verify your Python installation:
+    
+    ```bash
+    python --version
+    # or
+    python3 --version
+    ```
+    
+    <Info>
+      The tool requires **Python 3.12+** for modern type hints and language features.
+    </Info>
+  </Step>
+  
+  <Step title="X (Twitter) archive">
+    Request and download your complete X archive:
+    
+    1. Go to [X.com](https://x.com) → **More** → **Settings and Privacy** → **Your Account**
+    2. Click **"Download an archive of your data"**
+    3. Wait for confirmation email (typically 24-48 hours)
+    4. Download and extract the ZIP file
+    
+    <Warning>
+      Archive requests can take 24-48 hours to process. Request yours early!
+    </Warning>
+    
+    The extracted archive should contain:
+    ```
+    your-archive/
+    ├── data/
+    │   └── tweets.json    # This is the file you need
+    └── ...
+    ```
+  </Step>
+  
+  <Step title="Gemini API key">
+    Get a free API key from Google AI Studio:
+    
+    1. Visit [Google AI Studio](https://aistudio.google.com/app/apikey)
+    2. Sign in with your Google account
+    3. Click **"Create API Key"**
+    4. Copy your API key (you'll need it for configuration)
+    
+    <Tip>
+      Gemini 2.5 Flash offers 15 requests per minute and 1,500 per day for free—enough to analyze 1,000+ tweets daily.
+    </Tip>
+  </Step>
+</Steps>
+
+## Installation
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/DanielPopoola/tweet-audit-impl.git
+    cd tweet-audit-impl
+    ```
+  </Step>
+  
+  <Step title="Install dependencies">
+    Choose your preferred package manager:
+    
+    <CodeGroup>
+      ```bash pip
+      pip install -r requirements.txt
+      ```
+      
+      ```bash uv (recommended)
+      # Install uv first if you don't have it
+      pip install uv
+      
+      # Install dependencies with uv
+      uv sync
+      ```
+    </CodeGroup>
+    
+    <Info>
+      **uv** is recommended for faster dependency resolution and installation. It's a modern Python package installer that's significantly faster than pip.
+    </Info>
+    
+    The tool requires these core dependencies:
+    - `google-genai>=1.63.0` - Google Gemini AI client
+    - `python-dotenv>=1.2.1` - Environment variable management
+    - `pytest>=9.0.2` - Testing framework
+    - `ruff>=0.15.1` - Code linting and formatting
+  </Step>
+  
+  <Step title="Verify installation">
+    Test that the tool is working:
+    
+    ```bash
+    python src/main.py
+    ```
+    
+    You should see the help message:
+    ```
+    usage: main.py [-h] [{extract-tweets,analyze-tweets}]
+    
+    Evaluate tweets against predetermined criteria
+    
+    positional arguments:
+      {extract-tweets,analyze-tweets}
+                            Command to execute
+    ```
+  </Step>
+</Steps>
+
+## Environment configuration
+
+Create a `.env` file in the project root with your configuration:
+
+<Steps>
+  <Step title="Create .env file">
+    ```bash
+    touch .env
+    ```
+  </Step>
+  
+  <Step title="Add required variables">
+    Open `.env` in your editor and add:
+    
+    ```bash .env
+    # Required: Your Gemini API key from Google AI Studio
+    GEMINI_API_KEY=your_api_key_here
+    
+    # Required: Your X (Twitter) username
+    X_USERNAME=your_x_username
+    ```
+    
+    <Warning>
+      Never commit your `.env` file to version control. It's already included in `.gitignore`.
+    </Warning>
+  </Step>
+  
+  <Step title="Add optional variables">
+    Customize these settings as needed:
+    
+    ```bash .env
+    # Optional: Gemini model to use (default: gemini-2.5-flash)
+    GEMINI_MODEL=gemini-2.5-flash
+    
+    # Optional: Rate limit between API calls in seconds (default: 1.0)
+    RATE_LIMIT_SECONDS=1.0
+    
+    # Optional: Log level (default: INFO)
+    # Options: DEBUG, INFO, WARNING, ERROR, CRITICAL
+    LOG_LEVEL=INFO
+    ```
+    
+    <Tip>
+      **RATE_LIMIT_SECONDS** controls the delay between API calls. Increase this value (e.g., `2.0`) if you encounter rate limiting errors.
+    </Tip>
+  </Step>
+</Steps>
+
+## Criteria configuration
+
+Define what makes a tweet "unaligned" with your values:
+
+<Steps>
+  <Step title="Create config.json (optional)">
+    Create a `config.json` file in the project root:
+    
+    ```bash
+    touch config.json
+    ```
+    
+    <Info>
+      If you skip this step, the tool uses sensible defaults focused on professional content moderation.
+    </Info>
+  </Step>
+  
+  <Step title="Define your criteria">
+    Add your custom criteria to `config.json`:
+    
+    ```json config.json
+    {
+      "criteria": {
+        "forbidden_words": [
+          "crypto",
+          "NFT",
+          "web3",
+          "damn",
+          "wtf"
+        ],
+        "topics_to_exclude": [
+          "Profanity or unprofessional language",
+          "Personal attacks or insults",
+          "Outdated political opinions",
+          "Controversial statements",
+          "Cryptocurrency hype"
+        ],
+        "tone_requirements": [
+          "Professional language only",
+          "Respectful communication",
+          "No offensive humor",
+          "Constructive criticism only"
+        ],
+        "additional_instructions": "Flag any content that could harm professional reputation or doesn't align with current values. Be extra cautious with tweets from 2020-2021."
+      }
+    }
+    ```
+  </Step>
+  
+  <Step title="Understand the criteria types">
+    <AccordionGroup>
+      <Accordion title="forbidden_words" icon="ban">
+        Exact word matches (case-insensitive). The AI flags tweets containing any of these words.
+        
+        **Example:**
+        ```json
+        "forbidden_words": ["damn", "wtf", "crypto"]
+        ```
+        
+        - Flags: "Crypto is the future!" ✓
+        - Keeps: "Cryptocurrency adoption" ✗ (different word)
+      </Accordion>
+      
+      <Accordion title="topics_to_exclude" icon="list-check">
+        High-level content categories. The AI interprets these broadly and flags tweets matching these themes.
+        
+        **Example:**
+        ```json
+        "topics_to_exclude": [
+          "Political opinions",
+          "Cryptocurrency hype",
+          "Personal attacks"
+        ]
+        ```
+      </Accordion>
+      
+      <Accordion title="tone_requirements" icon="comment">
+        Stylistic rules for communication tone. The AI checks if tweets violate these standards.
+        
+        **Example:**
+        ```json
+        "tone_requirements": [
+          "Professional language",
+          "No sarcasm",
+          "Constructive criticism only"
+        ]
+        ```
+      </Accordion>
+      
+      <Accordion title="additional_instructions" icon="message">
+        Free-form guidance for the AI. Use this for nuanced instructions or context-specific rules.
+        
+        **Example:**
+        ```json
+        "additional_instructions": "Be extra cautious with tweets from 2020-2021 during controversial periods. Flag anything that could be misinterpreted out of context."
+        ```
+      </Accordion>
+    </AccordionGroup>
+  </Step>
+</Steps>
+
+## Default criteria
+
+If you don't create `config.json`, the tool uses these defaults (defined in `src/config.py:51-64`):
+
+```python
+Criteria(
+    forbidden_words=[],
+    topics_to_exclude=[
+        "Profanity or unprofessional language",
+        "Personal attacks or insults",
+        "Outdated political opinions",
+    ],
+    tone_requirements=[
+        "Professional language only",
+        "Respectful communication",
+    ],
+    additional_instructions="Flag any content that could harm professional reputation"
+)
+```
+
+## Prepare your Twitter archive
+
+Place your extracted Twitter archive in the correct location:
+
+<Steps>
+  <Step title="Create data directory">
+    ```bash
+    mkdir -p data/tweets
+    ```
+  </Step>
+  
+  <Step title="Copy tweets.json">
+    Copy the `tweets.json` file from your extracted X archive:
+    
+    ```bash
+    cp /path/to/your/archive/data/tweets.json data/tweets/tweets.json
+    ```
+    
+    <Info>
+      The tool expects to find your tweets at `data/tweets/tweets.json` by default. This path is configured in `src/config.py:35`.
+    </Info>
+  </Step>
+  
+  <Step title="Verify archive structure">
+    Your project should now look like:
+    
+    ```
+    tweet-audit-impl/
+    ├── data/
+    │   └── tweets/
+    │       └── tweets.json    # Your X archive
+    ├── src/
+    │   └── ...
+    ├── .env                    # Your environment variables
+    ├── config.json             # Your criteria (optional)
+    └── ...
+    ```
+  </Step>
+</Steps>
+
+## Verify setup
+
+Before running analysis, verify everything is configured correctly:
+
+<CodeGroup>
+  ```bash Check API key
+  python -c "from dotenv import load_dotenv; import os; load_dotenv(); print('API key loaded' if os.getenv('GEMINI_API_KEY') else 'Missing GEMINI_API_KEY')"
+  ```
+  
+  ```bash Check archive
+  ls -lh data/tweets/tweets.json
+  ```
+  
+  ```bash Check config
+  cat config.json
+  ```
+</CodeGroup>
+
+<Check>If all checks pass, you're ready to start analyzing tweets!</Check>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="ModuleNotFoundError: No module named 'google.genai'" icon="circle-exclamation">
+    Dependencies weren't installed correctly. Try:
+    
+    ```bash
+    pip install --upgrade -r requirements.txt
+    ```
+  </Accordion>
+  
+  <Accordion title="GEMINI_API_KEY is required" icon="key">
+    Your `.env` file is missing or doesn't contain `GEMINI_API_KEY`. Verify:
+    
+    ```bash
+    cat .env | grep GEMINI_API_KEY
+    ```
+    
+    Ensure the line reads:
+    ```bash
+    GEMINI_API_KEY=your_actual_api_key_here
+    ```
+  </Accordion>
+  
+  <Accordion title="FileNotFoundError: data/tweets/tweets.json" icon="file">
+    Your Twitter archive isn't in the expected location. Check:
+    
+    ```bash
+    ls data/tweets/
+    ```
+    
+    Copy your archive to the correct location:
+    ```bash
+    mkdir -p data/tweets
+    cp /path/to/archive/data/tweets.json data/tweets/
+    ```
+  </Accordion>
+  
+  <Accordion title="Python version error" icon="python">
+    The tool requires Python 3.12+. Check your version:
+    
+    ```bash
+    python --version
+    ```
+    
+    If you have multiple Python versions:
+    ```bash
+    python3.12 src/main.py
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Next steps
+
+<Card
+  title="Quick start"
+  icon="rocket"
+  href="/quickstart"
+>
+  Now that you're set up, run your first tweet analysis
+</Card>

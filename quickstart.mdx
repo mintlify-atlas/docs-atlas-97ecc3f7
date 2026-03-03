@@ -1,80 +1,524 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quick start
+description: Run your first tweet analysis in minutes and start cleaning up your Twitter history
 ---
 
-## Get started in three steps
+<Note>
+  Before starting, make sure you've completed the [installation](/installation) steps, including setting up your `.env` file and placing your Twitter archive in `data/tweets/tweets.json`.
+</Note>
 
-Get your documentation site running locally and make your first customization.
+## Your first analysis
 
-### Step 1: Set up your local environment
+The tweet audit process involves two simple commands:
+
+<Steps>
+  <Step title="Extract tweets from archive">
+    Convert your X archive JSON to a structured CSV format:
+    
+    ```bash
+    python src/main.py extract-tweets
+    ```
+    
+    **Expected output:**
+    ```
+    Extracting tweets from archive...
+    Successfully extracted 1247 tweets
+    ```
+    
+    This command:
+    - Reads `data/tweets/tweets.json` (your X archive)
+    - Parses and validates tweet data
+    - Writes structured CSV to `data/tweets/transformed/tweets.csv`
+    - Skips retweets automatically
+    
+    <Info>
+      The extraction process is defined in `src/application.py:47-62`. It uses `JSONParser` to read the archive and `CSVWriter` to create the transformed output.
+    </Info>
+  </Step>
+  
+  <Step title="Analyze tweets with AI">
+    Send tweets to Gemini AI for evaluation against your criteria:
+    
+    ```bash
+    python src/main.py analyze-tweets
+    ```
+    
+    **Expected output:**
+    ```
+    Analyzing tweets...
+    Loading tweets from data/tweets/transformed/tweets.csv
+    Loaded 1247 tweets for analysis
+    Resuming from tweet index 0
+    Processing batch 1/125 (tweets 1-10 of 1247)
+    Processing batch 2/125 (tweets 11-20 of 1247)
+    ...
+    Analysis complete. Results written to data/tweets/processed/results.csv
+    Successfully analyzed 1247 tweets
+    ```
+    
+    This command:
+    - Loads tweets from the transformed CSV
+    - Processes tweets in batches (default: 10 tweets per batch)
+    - Sends each tweet to Gemini AI for analysis
+    - Writes flagged tweets to `data/tweets/processed/results.csv`
+    - Saves checkpoints after each batch for resumability
+    
+    <Tip>
+      Analysis respects rate limits with a default 1-second delay between API calls. For 1,000 tweets, expect ~17 minutes of processing time.
+    </Tip>
+  </Step>
+  
+  <Step title="Review results">
+    Open the results CSV to see flagged tweets:
+    
+    ```bash
+    cat data/tweets/processed/results.csv
+    ```
+    
+    **Example output:**
+    ```csv
+    tweet_url,deleted
+    https://x.com/username/status/1234567890,false
+    https://x.com/username/status/1234567891,false
+    https://x.com/username/status/1234567892,false
+    ```
+    
+    Each row contains:
+    - `tweet_url` - Direct link to the tweet on X
+    - `deleted` - Status flag (`false` by default, update to `true` after deleting)
+  </Step>
+  
+  <Step title="Delete flagged tweets">
+    Review and manually delete tweets:
+    
+    1. **Visit each URL** in your browser
+    2. **Read the tweet** and decide if you agree with the AI's assessment
+    3. **Delete manually** if you agree (click ⋯ → Delete)
+    4. **Update the CSV** by changing `false` to `true` for deleted tweets
+    
+    <Warning>
+      The tool **never** deletes tweets automatically. You maintain complete control over what gets deleted.
+    </Warning>
+  </Step>
+</Steps>
+
+## Understanding the output
+
+After running both commands, your `data/` directory will look like:
+
+```
+data/
+├── tweets/
+│   ├── tweets.json              # Original X archive
+│   ├── transformed/
+│   │   └── tweets.csv           # Extracted and structured tweets
+│   └── processed/
+│       └── results.csv          # Tweets flagged for deletion
+└── checkpoint.txt               # Resume point if interrupted
+```
+
+### File details
 
 <AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
+  <Accordion title="tweets.json" icon="file-code">
+    Your original X archive export. This file is never modified.
     
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
+    ```json
+    [
+      {
+        "tweet": {
+          "id": "1234567890",
+          "full_text": "This is my tweet content",
+          "created_at": "Wed Mar 15 10:30:00 +0000 2023"
+        }
+      }
+    ]
+    ```
   </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
+  
+  <Accordion title="transformed/tweets.csv" icon="table">
+    Structured CSV with extracted tweet data. Used as input for analysis.
     
-    <Tip>Your preview updates automatically as you edit files.</Tip>
+    ```csv
+    id,content,created_at
+    1234567890,"This is my tweet content","2023-03-15T10:30:00+00:00"
+    1234567891,"Another tweet","2023-03-14T15:20:00+00:00"
+    ```
+  </Accordion>
+  
+  <Accordion title="processed/results.csv" icon="check-circle">
+    Final output with URLs of tweets flagged for deletion.
+    
+    ```csv
+    tweet_url,deleted
+    https://x.com/username/status/1234567890,false
+    ```
+    
+    Update the `deleted` column to `true` after manually deleting tweets to track your progress.
+  </Accordion>
+  
+  <Accordion title="checkpoint.txt" icon="bookmark">
+    Stores the last processed tweet index for resumability.
+    
+    ```
+    120
+    ```
+    
+    If analysis is interrupted, the tool automatically resumes from this point.
   </Accordion>
 </AccordionGroup>
 
-### Step 2: Deploy your changes
+## Advanced usage
+
+### Resume interrupted analysis
+
+The tool automatically saves progress after each batch. If interrupted (Ctrl+C, crash, API quota exceeded):
+
+```bash
+# Simply run analyze again - it automatically resumes
+python src/main.py analyze-tweets
+```
+
+**Output:**
+```
+Analyzing tweets...
+Loaded 1247 tweets for analysis
+Resuming from tweet index 120  # <-- Picks up where it left off
+Processing batch 13/125 (tweets 121-130 of 1247)
+...
+```
+
+<Info>
+  The checkpoint system is implemented in `src/application.py:77-79` using the `Checkpoint` class that reads/writes `data/checkpoint.txt`.
+</Info>
+
+### Test with a small sample
+
+Before processing thousands of tweets, test your criteria on a small sample:
+
+<Steps>
+  <Step title="Create test archive">
+    Extract 5-10 tweets manually from your archive:
+    
+    ```bash
+    # Create a test file with just a few tweets
+    python -c "import json; tweets = json.load(open('data/tweets/tweets.json')); json.dump(tweets[:10], open('data/tweets/tweets-test.json', 'w'))"
+    ```
+  </Step>
+  
+  <Step title="Temporarily update config">
+    Edit `src/config.py` to use the test file:
+    
+    ```python
+    tweets_archive_path: str = "data/tweets/tweets-test.json"
+    ```
+  </Step>
+  
+  <Step title="Run analysis on test data">
+    ```bash
+    python src/main.py extract-tweets
+    python src/main.py analyze-tweets
+    ```
+  </Step>
+  
+  <Step title="Review and refine">
+    Check `data/tweets/processed/results.csv` and adjust your `config.json` criteria based on results.
+  </Step>
+  
+  <Step title="Reset and run full analysis">
+    ```bash
+    # Delete test outputs and checkpoint
+    rm -rf data/tweets/transformed/ data/tweets/processed/ data/checkpoint.txt
+    
+    # Restore original config
+    # Edit src/config.py back to: tweets_archive_path: str = "data/tweets/tweets.json"
+    
+    # Run full analysis
+    python src/main.py extract-tweets
+    python src/main.py analyze-tweets
+    ```
+  </Step>
+</Steps>
+
+### Adjust processing speed
+
+Control API call frequency to balance speed and rate limits:
+
+<CodeGroup>
+  ```bash Faster (0.5s delay)
+  # Edit .env
+  RATE_LIMIT_SECONDS=0.5
+  ```
+  
+  ```bash Default (1.0s delay)
+  # Edit .env
+  RATE_LIMIT_SECONDS=1.0
+  ```
+  
+  ```bash Slower (2.0s delay)
+  # Edit .env
+  RATE_LIMIT_SECONDS=2.0
+  ```
+</CodeGroup>
+
+<Warning>
+  Faster rates may hit API limits. If you see 429 errors, increase `RATE_LIMIT_SECONDS`.
+</Warning>
+
+### Change batch size
+
+Modify batch size in `src/config.py` (default: 10 tweets per batch):
+
+```python src/config.py
+batch_size: int = 10  # Process 10 tweets per batch
+```
+
+**Trade-offs:**
+- **Larger batches** (e.g., 50) = Faster processing, longer recovery if interrupted
+- **Smaller batches** (e.g., 5) = More frequent checkpoints, better resumability
+
+### Enable debug logging
+
+Get detailed logs for troubleshooting:
+
+```bash .env
+LOG_LEVEL=DEBUG
+```
+
+**Output with DEBUG enabled:**
+```
+2024-03-15 10:30:00 - __main__ - INFO - Analyzing tweets...
+2024-03-15 10:30:00 - application - INFO - Loading tweets from data/tweets/transformed/tweets.csv
+2024-03-15 10:30:01 - analyzer - DEBUG - Tweet 1234567890: DELETE
+2024-03-15 10:30:02 - analyzer - DEBUG - Tweet 1234567891: KEEP
+2024-03-15 10:30:03 - analyzer - DEBUG - Tweet 1234567892: DELETE
+...
+```
+
+## Understanding AI decisions
+
+Gemini AI evaluates each tweet and returns a decision:
+
+<CodeGroup>
+  ```json DELETE
+  {
+    "decision": "DELETE",
+    "reason": "Contains forbidden word 'crypto' and promotes cryptocurrency hype"
+  }
+  ```
+  
+  ```json KEEP
+  {
+    "decision": "KEEP",
+    "reason": "Professional tone, no violations detected"
+  }
+  ```
+</CodeGroup>
+
+The prompt sent to Gemini (defined in `src/analyzer.py:107-136`):
+
+```python
+You are evaluating tweets for a professional's Twitter cleanup.
+
+Tweet ID: 1234567890
+Tweet: "Check out this crypto project!"
+
+Mark for deletion if it violates any of these criteria:
+1. Profanity or unprofessional language
+2. Personal attacks or insults
+3. Outdated political opinions
+4. Contains any of these words: crypto, NFT, web3
+
+Additional guidance: Flag any content that could harm professional reputation
+
+Respond in JSON format:
+{
+  "decision": "DELETE" or "KEEP",
+  "reason": "brief explanation"
+}
+```
+
+## Common workflows
 
 <AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
+  <Accordion title="Full archive cleanup" icon="broom">
+    Process all tweets and clean up your entire history:
     
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
-
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
-
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
+    ```bash
+    # Extract all tweets
+    python src/main.py extract-tweets
+    
+    # Analyze all tweets
+    python src/main.py analyze-tweets
+    
+    # Review results
+    cat data/tweets/processed/results.csv
+    
+    # Delete flagged tweets manually via X.com
+    ```
+  </Accordion>
+  
+  <Accordion title="Iterative refinement" icon="arrows-rotate">
+    Test criteria on samples before full analysis:
+    
+    ```bash
+    # 1. Test on small sample (manually create test file)
+    python src/main.py extract-tweets
+    python src/main.py analyze-tweets
+    
+    # 2. Review results and adjust config.json
+    cat data/tweets/processed/results.csv
+    
+    # 3. Clear outputs and retest
+    rm -rf data/tweets/transformed/ data/tweets/processed/ data/checkpoint.txt
+    
+    # 4. Once satisfied, run on full archive
+    python src/main.py extract-tweets
+    python src/main.py analyze-tweets
+    ```
+  </Accordion>
+  
+  <Accordion title="Periodic audits" icon="calendar">
+    Run audits regularly to catch new problematic tweets:
+    
+    ```bash
+    # 1. Download fresh archive from X
+    # 2. Replace data/tweets/tweets.json
+    # 3. Clear previous results
+    rm -rf data/tweets/transformed/ data/tweets/processed/ data/checkpoint.txt
+    
+    # 4. Run fresh analysis
+    python src/main.py extract-tweets
+    python src/main.py analyze-tweets
+    ```
   </Accordion>
 </AccordionGroup>
 
-### Step 3: Go live
+## Troubleshooting
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+<AccordionGroup>
+  <Accordion title="Missing required column: id" icon="circle-exclamation">
+    The transformed CSV is corrupted. Delete and re-extract:
+    
+    ```bash
+    rm -rf data/tweets/transformed/
+    python src/main.py extract-tweets
+    ```
+  </Accordion>
+  
+  <Accordion title="API rate limit errors (429)" icon="gauge">
+    You're hitting Gemini's rate limits. Solutions:
+    
+    1. **Increase delay** in `.env`:
+       ```bash
+       RATE_LIMIT_SECONDS=2.0
+       ```
+    
+    2. **Wait and resume** (the tool auto-resumes):
+       ```bash
+       # Wait 1 hour, then:
+       python src/main.py analyze-tweets
+       ```
+    
+    3. **Check daily quota** at [Google AI Studio](https://aistudio.google.com/)
+  </Accordion>
+  
+  <Accordion title="Empty response from Gemini" icon="message">
+    Gemini returned an empty response. The tool will retry automatically (up to 3 times with exponential backoff).
+    
+    If it persists:
+    ```bash
+    # Check your API key is valid
+    echo $GEMINI_API_KEY
+    
+    # Try a different model
+    # Edit .env:
+    GEMINI_MODEL=gemini-1.5-flash
+    ```
+  </Accordion>
+  
+  <Accordion title="Tool keeps flagging everything (or nothing)" icon="sliders">
+    Your criteria might be too strict (or too lenient). Adjust `config.json`:
+    
+    **If flagging too much:**
+    - Remove some `forbidden_words`
+    - Make `topics_to_exclude` more specific
+    - Soften `tone_requirements`
+    
+    **If flagging too little:**
+    - Add more `forbidden_words`
+    - Expand `topics_to_exclude`
+    - Strengthen `additional_instructions`
+    
+    Then clear checkpoint and re-analyze:
+    ```bash
+    rm data/checkpoint.txt data/tweets/processed/results.csv
+    python src/main.py analyze-tweets
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Cost and time estimates
+
+### Gemini API limits (free tier)
+
+- **Requests per minute**: 15
+- **Requests per day**: 1,500
+- **Cost**: Free for moderate use
+
+### Processing time
+
+<CardGroup cols={3}>
+  <Card title="100 tweets" icon="clock">
+    ~2 minutes
+    
+    (1 req/sec)
+  </Card>
+  <Card title="1,000 tweets" icon="clock">
+    ~17 minutes
+    
+    (1 req/sec)
+  </Card>
+  <Card title="10,000 tweets" icon="clock">
+    ~7 days
+    
+    (1,500 req/day limit)
+  </Card>
+</CardGroup>
+
+<Tip>
+  For large archives (10,000+ tweets), consider spreading analysis over multiple days or upgrading to a paid Gemini API plan.
+</Tip>
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card
+    title="Configuration guide"
+    icon="gear"
+    href="/guides/configuration"
+  >
+    Learn advanced criteria customization and settings
+  </Card>
+  <Card
+    title="CLI reference"
+    icon="terminal"
+    href="/cli/overview"
+  >
+    Complete command-line interface documentation
+  </Card>
+  <Card
+    title="Troubleshooting"
+    icon="life-ring"
+    href="/troubleshooting"
+  >
+    Common issues and solutions
+  </Card>
+  <Card
+    title="GitHub repository"
+    icon="github"
+    href="https://github.com/DanielPopoola/tweet-audit-impl"
+  >
+    View source code and contribute
+  </Card>
 </CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>

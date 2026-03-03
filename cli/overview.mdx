@@ -1,0 +1,108 @@
+---
+title: CLI overview
+description: Command-line interface for the Tweet Audit Tool
+---
+
+The Tweet Audit Tool provides a simple command-line interface with two main commands to help you analyze and audit your Twitter archive.
+
+## Basic usage
+
+The CLI follows a simple command structure:
+
+```bash
+python src/main.py <command>
+```
+
+Where `<command>` is one of the available commands listed below.
+
+## Available commands
+
+The tool provides two sequential commands:
+
+<CardGroup cols={2}>
+  <Card title="extract-tweets" icon="file-export" href="/cli/extract-tweets">
+    Extract tweets from your Twitter archive JSON file
+  </Card>
+  <Card title="analyze-tweets" icon="brain" href="/cli/analyze-tweets">
+    Analyze extracted tweets using Gemini AI
+  </Card>
+</CardGroup>
+
+## Typical workflow
+
+The commands are designed to be run in sequence:
+
+1. **Extract**: First, run `extract-tweets` to convert your Twitter archive from JSON to CSV format
+2. **Analyze**: Then, run `analyze-tweets` to process tweets with AI and generate deletion recommendations
+
+```bash
+# Step 1: Extract tweets from archive
+python src/main.py extract-tweets
+
+# Step 2: Analyze the extracted tweets
+python src/main.py analyze-tweets
+```
+
+## Command help
+
+To see all available commands, run the CLI without any arguments:
+
+```bash
+python src/main.py
+```
+
+This displays the help message with a list of available commands.
+
+## Exit codes
+
+The CLI uses standard exit codes to indicate success or failure:
+
+<ResponseField name="0" type="Success">
+  Command completed successfully
+</ResponseField>
+
+<ResponseField name="1" type="Error">
+  Command failed due to an error (see error message for details)
+</ResponseField>
+
+## Error handling
+
+When a command fails, the CLI:
+- Prints a descriptive error message to stderr
+- Exits with code 1
+- Logs detailed error information (check logs for debugging)
+
+<Tip>
+  The tool includes comprehensive error handling for common issues like missing files, permission errors, and invalid data formats.
+</Tip>
+
+## Output format
+
+All commands provide clear console output:
+
+- **Progress messages**: Displayed during execution
+- **Success messages**: Show counts and confirmation
+- **Error messages**: Include specific details about failures
+
+### Example output
+
+```bash
+$ python src/main.py extract-tweets
+Extracting tweets from archive...
+Successfully extracted 1247 tweets
+
+$ python src/main.py analyze-tweets
+Analyzing tweets...
+Successfully analyzed 1247 tweets
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Extract tweets" icon="download" href="/cli/extract-tweets">
+    Learn about the extract-tweets command
+  </Card>
+  <Card title="Analyze tweets" icon="magnifying-glass" href="/cli/analyze-tweets">
+    Learn about the analyze-tweets command
+  </Card>
+</CardGroup>

@@ -1,0 +1,460 @@
+---
+title: Handling large tweet archives
+description: Best practices and strategies for efficiently processing archives with 10,000+ tweets
+---
+
+Processing large tweet archives requires careful planning around API limits, processing time, and cost management. This guide covers strategies for handling extensive tweet histories efficiently.
+
+## What counts as a large archive?
+
+<CardGroup cols={3}>
+  <Card title="Small" icon="feather">
+    < 1,000 tweets
+    
+    ~20 minutes
+    
+    No special handling needed
+  </Card>
+  
+  <Card title="Medium" icon="box">
+    1,000 - 10,000 tweets
+    
+    ~3 hours
+    
+    Basic rate limiting sufficient
+  </Card>
+  
+  <Card title="Large" icon="database">
+    10,000+ tweets
+    
+    Multiple days
+    
+    Requires planning (this guide)
+  </Card>
+</CardGroup>
+
+## Understanding API limits
+
+Gemini 2.5 Flash (free tier) limits:
+
+<AccordionGroup>
+  <Accordion title="Rate limits">
+    - **15 requests per minute**
+    - **1,500 requests per day**
+    
+    With default settings (`RATE_LIMIT_SECONDS=1.0`):
+    - You make 60 requests per minute → **Exceeds limit**
+    - You make ~3,600 requests per hour → **Exceeds daily limit**
+  </Accordion>
+  
+  <Accordion title="Cost estimates">
+    Gemini 2.5 Flash is free within limits:
+    - **Input**: 1,500 requests/day free
+    - **Output**: Generous free tier
+    
+    For large archives:
+    - 10,000 tweets = 10,000 API calls
+    - At 1,500/day = **~7 days** to complete
+    - Cost: **$0** (free tier)
+  </Accordion>
+  
+  <Accordion title="Quota exceeded behavior">
+    When you hit rate limits:
+    1. Tool automatically retries with exponential backoff
+    2. Wait time increases: 1s → 2s → 4s
+    3. After 3 attempts, the request fails
+    4. Progress is saved; resume with `analyze-tweets`
+  </Accordion>
+</AccordionGroup>
+
+## Strategy 1: Multi-day processing
+
+The simplest approach for free tier users with large archives.
+
+### Configuration
+
+Adjust rate limiting to stay within daily limits:
+
+```bash .env
+# Process 1,500 tweets per day (free tier limit)
+RATE_LIMIT_SECONDS=4.0
+
+# This gives you:
+# - 15 requests per minute (60s / 4s = 15)
+# - 900 requests per hour
+# - 1,440 requests per day (under 1,500 limit)
+```
+
+### Daily workflow
+
+<Steps>
+  <Step title="Day 1: Start processing">
+    Run analysis in the morning:
+    
+    ```bash
+    python src/main.py analyze-tweets
+    ```
+    
+    Let it run until you hit the daily limit (~1,400 tweets).
+  </Step>
+  
+  <Step title="Automatic stopping">
+    When the daily limit is reached:
+    
+    ```
+    Processing batch 140/1000 (10 tweets)
+    Error: Rate limit exceeded. Please try again tomorrow.
+    Progress saved to data/checkpoint.txt
+    ```
+    
+    The tool saves your progress automatically.
+  </Step>
+  
+  <Step title="Day 2-7: Resume daily">
+    Each day, run the same command:
+    
+    ```bash
+    python src/main.py analyze-tweets
+    ```
+    
+    The tool resumes from your last checkpoint.
+  </Step>
+  
+  <Step title="Check progress">
+    Monitor progress anytime:
+    
+    ```bash
+    # Check checkpoint file
+    cat data/checkpoint.txt
+    # Output: 1400
+    
+    # Count processed results
+    wc -l data/tweets/processed/results.csv
+    # Output: 127 (flagged tweets so far)
+    ```
+  </Step>
+</Steps>
+
+<Tip>
+**Timeline for 10,000 tweets**:
+- Day 1: Process 1,400 tweets (14%)
+- Day 2: Process 1,400 tweets (28%)
+- Day 3: Process 1,400 tweets (42%)
+- Day 4: Process 1,400 tweets (56%)
+- Day 5: Process 1,400 tweets (70%)
+- Day 6: Process 1,400 tweets (84%)
+- Day 7: Process remaining 1,600 tweets (100%)
+</Tip>
+
+## Strategy 2: Paid API tier
+
+For users who want to process large archives quickly.
+
+### Upgrade to paid tier
+
+1. Visit [Google AI Studio](https://aistudio.google.com/app/apikey)
+2. Enable billing on your Google Cloud project
+3. Paid tier removes the 1,500/day limit
+
+### Optimized configuration
+
+Process much faster with paid tier:
+
+```bash .env
+# Faster processing (respects 60 RPM limit)
+RATE_LIMIT_SECONDS=1.5
+
+# This gives you:
+# - 40 requests per minute (60s / 1.5s = 40)
+# - 2,400 requests per hour
+# - Full archive in hours, not days
+```
+
+### Cost calculation
+
+Gemini 2.5 Flash pricing (as of 2024):
+- **Input**: $0.075 per 1M tokens (~$0.0001 per tweet)
+- **Output**: $0.30 per 1M tokens
+
+For 10,000 tweets:
+- Input cost: ~$1.00
+- Output cost: ~$0.50
+- **Total**: ~$1.50
+
+<Note>
+Pricing changes over time. Check [Google's pricing page](https://ai.google.dev/pricing) for current rates.
+</Note>
+
+### Processing timeline
+
+```bash
+python src/main.py analyze-tweets
+```
+
+Expected timeline:
+- 10,000 tweets at 40 req/min = **~4 hours**
+- 50,000 tweets = **~21 hours**
+- 100,000 tweets = **~42 hours**
+
+## Strategy 3: Selective processing
+
+Process only recent or relevant tweets instead of your entire archive.
+
+### Filter by date range
+
+Modify the extraction step to filter tweets:
+
+<Note>
+This requires custom code modification. The default tool processes all tweets.
+</Note>
+
+```python src/custom_extract.py
+import json
+from datetime import datetime, timedelta
+
+# Load full archive
+with open('data/tweets/tweets.json', 'r') as f:
+    data = json.load(f)
+
+# Filter tweets from last 2 years
+start_date = datetime.now() - timedelta(days=730)
+recent_tweets = [
+    tweet for tweet in data
+    if datetime.fromisoformat(tweet['created_at']) > start_date
+]
+
+# Save filtered tweets
+with open('data/tweets/tweets-filtered.json', 'w') as f:
+    json.dump(recent_tweets, f)
+```
+
+Then update your path in `.env` or modify `config.py`:
+
+```python src/config.py
+tweets_archive_path: str = "data/tweets/tweets-filtered.json"
+```
+
+### Filter by engagement
+
+Prioritize analyzing tweets that are still visible:
+
+```python src/custom_extract.py
+# Filter tweets with engagement (visible to others)
+engaged_tweets = [
+    tweet for tweet in data
+    if (tweet.get('favorite_count', 0) > 0 or 
+        tweet.get('retweet_count', 0) > 0)
+]
+```
+
+<Tip>
+**Use case**: If you have 50,000 tweets but only 5,000 have any engagement, focus on those first. Tweets with no engagement are less likely to impact your reputation.
+</Tip>
+
+## Strategy 4: Batch processing with checkpoints
+
+Leverage the built-in checkpoint system for interrupted workflows.
+
+### How checkpoints work
+
+The tool automatically saves progress:
+
+```
+data/
+└── checkpoint.txt    # Contains: last processed tweet index
+```
+
+Example `checkpoint.txt`:
+```
+1420
+```
+
+This means 1,420 tweets have been processed (142 batches × 10 tweets).
+
+### Manual checkpoint management
+
+<Tabs>
+  <Tab title="Check progress">
+    ```bash
+    cat data/checkpoint.txt
+    ```
+    
+    Output: `1420` (tweet index)
+  </Tab>
+  
+  <Tab title="Resume processing">
+    ```bash
+    # Automatically resumes from checkpoint
+    python src/main.py analyze-tweets
+    ```
+  </Tab>
+  
+  <Tab title="Reset progress">
+    ```bash
+    # Delete checkpoint to start over
+    rm data/checkpoint.txt
+    rm data/tweets/processed/results.csv
+    python src/main.py analyze-tweets
+    ```
+  </Tab>
+  
+  <Tab title="Skip to position">
+    ```bash
+    # Manually set checkpoint to skip first 5,000 tweets
+    echo "5000" > data/checkpoint.txt
+    python src/main.py analyze-tweets
+    ```
+  </Tab>
+</Tabs>
+
+### Handling interruptions
+
+The checkpoint system handles all interruption types:
+
+| Interruption Type | Behavior | Recovery |
+|------------------|----------|----------|
+| Manual Ctrl+C | Saves after current batch | Re-run `analyze-tweets` |
+| API quota exceeded | Saves before failure | Wait 24h, re-run |
+| Network failure | Retries 3x, then saves | Re-run when online |
+| Computer crash | Last batch checkpoint lost | Resume from last save |
+| Power outage | Last batch checkpoint lost | Resume from last save |
+
+<Note>
+Maximum lost progress in worst case: 1 batch (10 tweets by default)
+</Note>
+
+## Optimizing for speed
+
+### Adjust batch size
+
+Increase batch size for faster processing (with trade-offs):
+
+```python src/config.py
+batch_size: int = 50  # Default is 10
+```
+
+**Pros**:
+- Faster overall processing
+- Fewer checkpoint writes
+
+**Cons**:
+- More progress lost if interrupted
+- Longer wait between progress updates
+
+<Tip>
+**Recommended batch sizes**:
+- Stable connection: 50
+- Unstable connection: 10 (default)
+- Testing criteria: 5
+</Tip>
+
+### Parallel processing (advanced)
+
+For very large archives (100,000+ tweets), consider splitting the work:
+
+```bash
+# Split archive into 4 parts
+split -n l/4 data/tweets/transformed/tweets.csv data/tweets/part-
+
+# Process each part separately (requires code modification)
+python src/main.py analyze-tweets --input data/tweets/part-aa &
+python src/main.py analyze-tweets --input data/tweets/part-ab &
+python src/main.py analyze-tweets --input data/tweets/part-ac &
+python src/main.py analyze-tweets --input data/tweets/part-ad &
+
+# Wait for all to complete
+wait
+
+# Merge results
+cat data/tweets/processed/results-*.csv > data/tweets/processed/results.csv
+```
+
+<Note>
+Parallel processing requires code modifications to support multiple input files and checkpoint files. This is not supported out of the box.
+</Note>
+
+## Monitoring long-running jobs
+
+### Real-time progress tracking
+
+Monitor progress in a separate terminal:
+
+```bash
+# Watch checkpoint file update
+watch -n 5 'cat data/checkpoint.txt'
+
+# Count flagged tweets so far
+watch -n 10 'wc -l data/tweets/processed/results.csv'
+
+# Monitor log output
+tail -f tweet-audit.log
+```
+
+### Estimate completion time
+
+```bash
+# Calculate remaining time
+# Current checkpoint: 3420
+# Total tweets: 10000
+# Rate: 1 tweet per 4 seconds
+
+echo "Remaining: $((10000 - 3420)) tweets"
+echo "Time: $((10000 - 3420) * 4 / 3600) hours"
+```
+
+Example output:
+```
+Remaining: 6580 tweets
+Time: 7 hours
+```
+
+## Troubleshooting large archives
+
+### Memory issues
+
+If you see `MemoryError`:
+
+```bash
+# The tool loads the entire CSV into memory
+# For 100,000+ tweets, this can be several GB
+
+# Solution: Process in smaller chunks using manual filtering
+# Or increase available system memory
+```
+
+### Disk space
+
+Check available space:
+
+```bash
+df -h data/
+```
+
+Storage requirements:
+- Original archive: 5-10 MB per 10,000 tweets
+- Transformed CSV: ~2x original size
+- Results CSV: ~1-5% of transformed size
+- **Total**: ~3x original archive size
+
+### Connection timeouts
+
+For unreliable connections:
+
+```bash .env
+# Increase timeout tolerance
+RATE_LIMIT_SECONDS=5.0
+```
+
+The retry mechanism handles transient failures automatically.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Basic workflow" icon="route" href="/examples/basic-workflow">
+    Review the end-to-end process
+  </Card>
+  
+  <Card title="Custom criteria" icon="sliders" href="/examples/custom-criteria">
+    Fine-tune your deletion criteria
+  </Card>
+</CardGroup>

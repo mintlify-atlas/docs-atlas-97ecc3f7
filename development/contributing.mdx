@@ -1,0 +1,578 @@
+---
+title: Contributing guidelines
+description: Learn how to contribute to Tweet Audit Tool with code, documentation, and pull requests
+---
+
+## Getting started
+
+Thank you for considering contributing to Tweet Audit Tool! This guide will help you get started with contributing code, documentation, and improvements.
+
+### Before you begin
+
+<Steps>
+  <Step title="Set up your environment">
+    Follow the [development setup guide](/development/setup) to configure your local environment.
+  </Step>
+
+  <Step title="Familiarize yourself with the codebase">
+    Read through the project structure and understand the code organization:
+
+    - Each file has a single responsibility (models, config, storage, analyzer, application, main)
+    - Tests mirror the source code structure
+    - All tests should follow the Arrange-Act-Assert pattern
+  </Step>
+
+  <Step title="Check existing issues">
+    Look for existing issues or feature requests on GitHub before starting work. This helps avoid duplicate efforts.
+  </Step>
+</Steps>
+
+## Pull request process
+
+<Steps>
+  <Step title="Fork and clone">
+    Fork the repository on GitHub and clone your fork:
+
+    ```bash
+    git clone https://github.com/YOUR_USERNAME/tweet-audit-impl.git
+    cd tweet-audit-impl
+    ```
+  </Step>
+
+  <Step title="Create a feature branch">
+    Create a descriptive branch name for your changes:
+
+    ```bash
+    git checkout -b feature/add-json-export
+    # or
+    git checkout -b fix/checkpoint-corruption
+    # or
+    git checkout -b docs/update-api-examples
+    ```
+
+    <Note>
+      Use prefixes: `feature/`, `fix/`, `docs/`, `refactor/`, `test/`, or `chore/`
+    </Note>
+  </Step>
+
+  <Step title="Make your changes">
+    Follow the coding standards and best practices outlined below. Key points:
+
+    - Write tests for new functionality
+    - Update documentation if needed
+    - Follow existing code style and conventions
+    - Keep commits focused and atomic
+  </Step>
+
+  <Step title="Run quality checks">
+    Before committing, ensure all checks pass:
+
+    ```bash
+    # Format code
+    ruff format .
+    
+    # Check for linting issues
+    ruff check --fix .
+    
+    # Run tests with coverage
+    pytest --cov=src
+    ```
+
+    All tests should pass and coverage should meet the guidelines:
+    - Core logic: 80%+
+    - Utilities: 60%+
+    - CLI: 40%+
+  </Step>
+
+  <Step title="Commit your changes">
+    Write clear, descriptive commit messages following the conventional commits format:
+
+    ```bash
+    git add .
+    git commit -m "feat: add JSON output format for analysis results"
+    ```
+
+    See [commit message format](#commit-message-format) below for details.
+  </Step>
+
+  <Step title="Push and create pull request">
+    Push your branch and create a pull request:
+
+    ```bash
+    git push origin feature/add-json-export
+    ```
+
+    Then open a pull request on GitHub with:
+    - Clear title describing the change
+    - Description of what was changed and why
+    - Reference to any related issues
+    - Screenshots or examples if applicable
+  </Step>
+</Steps>
+
+## Commit message format
+
+Follow the conventional commits specification:
+
+```
+<type>: <description>
+
+[optional body]
+
+[optional footer]
+```
+
+### Commit types
+
+- **feat** - New feature
+- **fix** - Bug fix
+- **docs** - Documentation only changes
+- **style** - Code style changes (formatting, etc.)
+- **refactor** - Code restructuring without changing behavior
+- **test** - Adding or updating tests
+- **chore** - Maintenance tasks (dependencies, build, etc.)
+
+### Examples
+
+<CodeGroup>
+  ```bash Feature
+  feat: add support for JSON output format
+  
+  Adds a new JSONWriter class that exports analysis results
+  in JSON format alongside the existing CSV format.
+  ```
+
+  ```bash Bug fix
+  fix: handle empty tweet content gracefully
+  
+  Previously crashed when encountering tweets with no content.
+  Now skips empty tweets with a warning log message.
+  ```
+
+  ```bash Documentation
+  docs: update README with JSON export instructions
+  ```
+
+  ```bash Test
+  test: add coverage for checkpoint recovery
+  
+  Adds tests for checkpoint corruption and recovery scenarios.
+  ```
+
+  ```bash Chore
+  chore: upgrade pytest to 9.0.2
+  ```
+</CodeGroup>
+
+## Code style guidelines
+
+### Imports
+
+Organize imports in three groups:
+
+```python
+# Standard library
+import json
+import os
+from pathlib import Path
+
+# Third-party packages
+import google.genai as genai
+from dotenv import load_dotenv
+
+# Local modules
+from models import Tweet
+from config import settings
+```
+
+### Type hints
+
+Always use type hints for function parameters and return values:
+
+```python
+# Good
+def analyze(self, tweet: Tweet) -> AnalysisResult:
+    ...
+
+def process(tweets: list[Tweet]) -> dict[str, list[str]]:
+    ...
+
+# Bad
+def analyze(self, tweet):
+    ...
+
+def process(tweets):
+    ...
+```
+
+### Naming conventions
+
+- **Classes**: `PascalCase` (e.g., `TweetAnalyzer`, `CSVWriter`)
+- **Functions/methods**: `snake_case` (e.g., `analyze_tweet`, `write_results`)
+- **Constants**: `UPPER_SNAKE_CASE` (e.g., `MAX_RETRIES`, `DEFAULT_BATCH_SIZE`)
+- **Private methods**: `_leading_underscore` (e.g., `_build_prompt`, `_rate_limit`)
+
+### Docstrings
+
+Write docstrings for public functions and classes:
+
+```python
+def analyze(self, tweet: Tweet) -> AnalysisResult:
+    """Analyze a tweet using Gemini AI.
+    
+    Args:
+        tweet: The tweet to analyze
+        
+    Returns:
+        AnalysisResult with decision and tweet URL
+        
+    Raises:
+        ValueError: If API response is invalid
+        RuntimeError: If API request fails
+    """
+    ...
+```
+
+### Context managers
+
+Use context managers for resource management:
+
+```python
+# Good
+with CSVWriter(path) as writer:
+    writer.write_tweets(tweets)
+
+# Bad
+writer = CSVWriter(path)
+writer.open()
+writer.write_tweets(tweets)
+writer.close()  # Easy to forget!
+```
+
+### Fail fast
+
+Validate inputs early and raise clear exceptions:
+
+```python
+# Good
+def analyze(self, tweet: Tweet) -> AnalysisResult:
+    if not tweet.content:
+        raise ValueError("Tweet content cannot be empty")
+    # ... rest of code
+
+# Bad
+def analyze(self, tweet: Tweet) -> AnalysisResult:
+    if tweet.content:  # Silent failure if empty
+        # ... process
+    return None  # Caller doesn't know it failed
+```
+
+## Development workflow
+
+### Adding new features
+
+Follow this workflow when adding functionality:
+
+<Steps>
+  <Step title="Update models (if needed)">
+    If you need new data structures, add them to `models.py`:
+
+    ```python src/models.py
+    @dataclass(frozen=True)
+    class AnalysisResult:
+        tweet_url: str
+        decision: Decision
+        reason: str = ""  # Add new field
+    ```
+  </Step>
+
+  <Step title="Add core functionality">
+    Implement the feature in the appropriate module:
+
+    ```python src/storage.py
+    class JSONWriter:
+        def write_results(self, results: list[AnalysisResult]) -> None:
+            data = [
+                {
+                    "url": r.tweet_url,
+                    "decision": r.decision.value,
+                    "reason": r.reason
+                }
+                for r in results
+            ]
+            with open(self.path, 'w') as f:
+                json.dump(data, f, indent=2)
+    ```
+  </Step>
+
+  <Step title="Write tests">
+    Add comprehensive tests for the new functionality:
+
+    ```python tests/test_storage.py
+    def test_should_write_results_to_json(tmp_path):
+        output_path = tmp_path / "results.json"
+        results = [
+            AnalysisResult(
+                tweet_url="https://x.com/u/s/1",
+                decision=Decision.DELETE,
+                reason="Profanity"
+            )
+        ]
+        
+        with JSONWriter(str(output_path)) as writer:
+            writer.write_results(results)
+        
+        with open(output_path) as f:
+            data = json.load(f)
+        
+        assert len(data) == 1
+        assert data[0]["decision"] == "DELETE"
+        assert data[0]["reason"] == "Profanity"
+    ```
+  </Step>
+
+  <Step title="Integrate with application layer">
+    Wire up the feature in `application.py`:
+
+    ```python src/application.py
+    def analyze_tweets(self, output_format: str = "csv") -> Result:
+        # ... existing code ...
+        
+        if output_format == "json":
+            with JSONWriter(settings.json_results_path) as writer:
+                writer.write_results(results)
+        else:
+            with CSVWriter(settings.processed_results_path) as writer:
+                # ... existing code ...
+    ```
+  </Step>
+
+  <Step title="Update CLI (if applicable)">
+    Add command-line options if needed:
+
+    ```python src/main.py
+    parser.add_argument(
+        "--format",
+        choices=["csv", "json"],
+        default="csv",
+        help="Output format"
+    )
+    
+    result = app.analyze_tweets(output_format=args.format)
+    ```
+  </Step>
+
+  <Step title="Update documentation">
+    Document the new feature in README.md and other relevant docs.
+  </Step>
+</Steps>
+
+### Common tasks
+
+<AccordionGroup>
+  <Accordion title="Add new analysis criteria type">
+    1. Update `Criteria` model in `config.py`
+    2. Update `_build_prompt` in `analyzer.py` to include new criteria
+    3. Update `config.example.json` with example
+    4. Add tests in `test_analyzer.py`
+    5. Update README.md with new criteria explanation
+  </Accordion>
+
+  <Accordion title="Change Gemini model">
+    Update the model in `.env`:
+
+    ```bash
+    GEMINI_MODEL=gemini-1.5-pro  # Use Pro instead of Flash
+    ```
+
+    Or programmatically in `config.py`:
+
+    ```python
+    gemini_model: str = "gemini-1.5-pro"
+    ```
+  </Accordion>
+
+  <Accordion title="Add progress bar">
+    Install tqdm:
+
+    ```bash
+    pip install tqdm
+    ```
+
+    Use in `application.py`:
+
+    ```python
+    from tqdm import tqdm
+    
+    def analyze_tweets(self) -> Result:
+        tweets = parser.parse()
+        
+        with tqdm(total=len(tweets), desc="Analyzing") as pbar:
+            for tweet in tweets:
+                result = self.analyzer.analyze(tweet)
+                pbar.update(1)
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Testing guidelines
+
+### Test-driven development
+
+Always write tests before or alongside implementation:
+
+1. Write a failing test that defines the desired behavior
+2. Run the test to verify it fails (red)
+3. Implement the minimal code to make it pass (green)
+4. Refactor while keeping tests green
+5. Repeat
+
+### Test coverage
+
+Ensure adequate test coverage:
+
+```bash
+# Check coverage
+pytest --cov=src --cov-report=term-missing
+
+# Generate HTML report
+pytest --cov=src --cov-report=html
+open htmlcov/index.html
+```
+
+### Writing good tests
+
+<CardGroup cols={2}>
+  <Card title="Test one thing" icon="bullseye">
+    Each test should verify a single behavior or scenario
+  </Card>
+  <Card title="Use descriptive names" icon="tag">
+    Test names should clearly describe what's being tested
+  </Card>
+  <Card title="Mock external dependencies" icon="box">
+    Mock APIs, file systems, and external services
+  </Card>
+  <Card title="Test edge cases" icon="triangle-exclamation">
+    Include tests for error conditions and boundary cases
+  </Card>
+</CardGroup>
+
+## Code review process
+
+When reviewing or submitting code:
+
+### What reviewers look for
+
+- **Functionality** - Does the code work as intended?
+- **Tests** - Are there adequate tests with good coverage?
+- **Code style** - Does it follow project conventions?
+- **Documentation** - Are changes documented appropriately?
+- **Performance** - Are there any obvious performance issues?
+- **Security** - Are there any security concerns?
+
+### Responding to feedback
+
+- Address all review comments
+- Ask for clarification if feedback is unclear
+- Push additional commits to the same branch
+- Re-request review when ready
+
+<Info>
+  Be open to feedback and remember that code review improves code quality and helps everyone learn.
+</Info>
+
+## Documentation contributions
+
+Documentation improvements are highly valued:
+
+- Fix typos or unclear explanations
+- Add examples or use cases
+- Improve API documentation
+- Write tutorials or guides
+- Update outdated information
+
+Documentation follows the same pull request process as code changes.
+
+## Best practices
+
+<AccordionGroup>
+  <Accordion title="Keep functions small">
+    Each function should do one thing well:
+
+    ```python
+    # Good: Each function has a single responsibility
+    def analyze_tweets(self) -> Result:
+        tweets = self._load_tweets()
+        results = self._process_tweets(tweets)
+        self._save_results(results)
+        return Result(success=True)
+    
+    # Bad: God function
+    def analyze_tweets(self) -> Result:
+        # 200 lines of mixed concerns
+        ...
+    ```
+  </Accordion>
+
+  <Accordion title="Write self-documenting code">
+    Use clear variable and function names:
+
+    ```python
+    # Good
+    def should_delete_tweet(tweet: Tweet, criteria: Criteria) -> bool:
+        return contains_forbidden_word(tweet, criteria.forbidden_words)
+    
+    # Bad
+    def check(t, c):
+        return proc(t, c.fw)
+    ```
+  </Accordion>
+
+  <Accordion title="Avoid premature optimization">
+    Focus on correctness and clarity first:
+
+    1. Make it work (correctness)
+    2. Make it right (clean code)
+    3. Make it fast (only if needed)
+  </Accordion>
+
+  <Accordion title="Handle errors explicitly">
+    Don't silently ignore errors:
+
+    ```python
+    # Good
+    try:
+        result = api.call()
+    except APIError as e:
+        logger.error(f"API call failed: {e}")
+        raise
+    
+    # Bad
+    try:
+        result = api.call()
+    except:
+        pass  # What went wrong?
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Resources
+
+- [Python Style Guide (PEP 8)](https://peps.python.org/pep-0008/)
+- [Pytest Documentation](https://docs.pytest.org/)
+- [Ruff Documentation](https://docs.astral.sh/ruff/)
+- [Google Gemini API Docs](https://ai.google.dev/docs)
+- [Conventional Commits](https://www.conventionalcommits.org/)
+
+## Getting help
+
+If you need help:
+
+- **Read the docs** - Check DEVELOPMENT.md and README.md
+- **Review tests** - Tests show usage examples
+- **Ask questions** - Open a GitHub discussion
+- **Report bugs** - Open a GitHub issue with details
+
+## Thank you!
+
+Your contributions make this project better for everyone. We appreciate your time and effort in improving Tweet Audit Tool.

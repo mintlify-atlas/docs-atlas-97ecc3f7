@@ -1,0 +1,464 @@
+---
+title: Running tests and test structure
+description: Learn how to run tests, write new test cases, and understand the test structure in Tweet Audit Tool
+---
+
+## Running tests
+
+### Basic test commands
+
+The project uses pytest as the testing framework:
+
+<CodeGroup>
+  ```bash All tests
+  pytest
+  ```
+
+  ```bash Specific file
+  pytest tests/test_analyzer.py
+  ```
+
+  ```bash Specific test
+  pytest tests/test_analyzer.py::test_should_analyze_tweet_with_delete_decision
+  ```
+
+  ```bash Pattern matching
+  pytest -k "analyzer"
+  ```
+
+  ```bash Verbose output
+  pytest -v
+  ```
+
+  ```bash Show print statements
+  pytest -s
+  ```
+</CodeGroup>
+
+### Coverage reports
+
+Generate test coverage reports to identify untested code:
+
+<CodeGroup>
+  ```bash Terminal report
+  pytest --cov=src --cov-report=term-missing
+  ```
+
+  ```bash HTML report
+  pytest --cov=src --cov-report=html
+  # Open htmlcov/index.html in browser
+  ```
+
+  ```bash XML report (for CI)
+  pytest --cov=src --cov-report=xml
+  ```
+</CodeGroup>
+
+<Note>
+  The project is configured in `pyproject.toml` to automatically run with coverage when you run `pytest`.
+</Note>
+
+### Coverage guidelines
+
+Aim for these coverage targets:
+
+- **80%+ coverage** for core logic (application, analyzer, storage)
+- **60%+ coverage** for utilities (config, models)
+- **40%+ coverage** for CLI (main.py)
+
+## Test structure
+
+### Test organization
+
+Tests are organized to mirror the source code structure:
+
+```
+tests/
+├── test_main.py              # Tests for src/main.py
+├── test_application.py       # Tests for src/application.py
+├── test_analyzer.py          # Tests for src/analyzer.py
+├── test_storage.py           # Tests for src/storage.py
+├── test_config.py            # Tests for src/config.py
+├── conftest.py               # Shared test fixtures
+└── testdata/                 # Test data files
+    ├── tweets.json
+    ├── tweets.csv
+    ├── empty.json
+    └── invalid.json
+```
+
+### Naming conventions
+
+Tests follow a consistent naming pattern:
+
+```python
+def test_should_<expected_behavior>_when_<condition>():
+    # Test implementation
+```
+
+**Examples:**
+
+- `test_should_return_delete_decision_when_tweet_contains_profanity()`
+- `test_should_raise_error_when_file_not_found()`
+- `test_should_parse_tweets_when_valid_json_file_provided()`
+
+### Test structure pattern
+
+All tests follow the Arrange-Act-Assert pattern:
+
+```python
+def test_should_analyze_tweet_with_delete_decision():
+    # Arrange: Set up test data and mocks
+    tweet = Tweet(id="123", content="Test tweet with badword")
+    analyzer = Gemini()
+    
+    # Act: Execute the code being tested
+    result = analyzer.analyze(tweet)
+    
+    # Assert: Verify the outcome
+    assert result.decision == Decision.DELETE
+    assert "123" in result.tweet_url
+```
+
+## Writing tests
+
+### Using fixtures
+
+The project uses pytest fixtures for reusable test data. Fixtures are defined in `conftest.py`:
+
+```python tests/conftest.py
+@pytest.fixture
+def testdata_dir():
+    return Path(__file__).parent / "testdata"
+
+@pytest.fixture
+def mock_settings():
+    return Settings(
+        base_twitter_url="https://x.com",
+        x_username="testuser",
+        gemini_api_key="test-key",
+        gemini_model="gemini-test",
+    )
+```
+
+Use fixtures by adding them as function parameters:
+
+```python
+def test_something(mock_settings, testdata_dir):
+    # Fixtures are automatically injected
+    parser = JSONParser(str(testdata_dir / "tweets.json"))
+    tweets = parser.parse()
+    assert len(tweets) > 0
+```
+
+### Mocking external services
+
+Use `unittest.mock` to mock external dependencies like the Gemini API:
+
+```python
+from unittest.mock import Mock, patch
+
+@patch("analyzer.genai")  # Mock the Gemini client
+def test_analyzer(mock_genai, mock_settings):
+    # Setup mock responses
+    mock_model = Mock()
+    mock_response = Mock()
+    mock_response.text = '{"decision": "DELETE", "reason": "Contains profanity"}'
+    mock_model.models.generate_content.return_value = mock_response
+    mock_genai.Client.return_value = mock_model
+    
+    # Test code
+    with patch("analyzer.settings", mock_settings):
+        analyzer = Gemini()
+        tweet = Tweet(id="123", content="Test tweet")
+        result = analyzer.analyze(tweet)
+        
+        assert result.decision == Decision.DELETE
+```
+
+<Note>
+  When patching, patch where the object is **imported**, not where it's defined. For example, use `@patch("analyzer.genai")` not `@patch("google.genai")`.
+</Note>
+
+### Testing file operations
+
+Use pytest's `tmp_path` fixture for temporary file testing:
+
+```python
+def test_should_write_tweets_to_csv_file(tmp_path):
+    # tmp_path is a unique temporary directory
+    output_path = tmp_path / "output.csv"
+    tweets = [
+        Tweet(id="123", content="First tweet"),
+        Tweet(id="456", content="Second tweet"),
+    ]
+    
+    with CSVWriter(str(output_path)) as writer:
+        writer.write_tweets(tweets)
+    
+    # Verify the file was created correctly
+    with open(output_path, newline="") as f:
+        reader = csv.reader(f)
+        rows = list(reader)
+    
+    assert rows[0] == ["id", "text"]
+    assert rows[1] == ["123", "First tweet"]
+    assert rows[2] == ["456", "Second tweet"]
+```
+
+### Testing error conditions
+
+Use `pytest.raises` to test expected exceptions:
+
+```python
+def test_should_raise_error_when_api_fails(mock_settings):
+    with patch("analyzer.settings", mock_settings), patch("analyzer.genai") as mock_genai:
+        mock_model = Mock()
+        mock_model.models.generate_content.side_effect = RuntimeError("API connection failed")
+        mock_genai.Client.return_value = mock_model
+        
+        analyzer = Gemini()
+        tweet = Tweet(id="999", content="Test")
+        
+        with pytest.raises(RuntimeError, match="API connection failed"):
+            analyzer.analyze(tweet)
+```
+
+## Test examples
+
+### Example: Storage layer test
+
+Testing the JSON parser with valid and invalid data:
+
+```python
+def test_should_parse_tweets_when_valid_json_file_provided(testdata_dir):
+    parser = JSONParser(str(testdata_dir / "tweets.json"))
+    tweets = parser.parse()
+    
+    assert len(tweets) == 4
+    assert tweets[0].id == "1234567890123456789"
+    assert "#golang error handling" in tweets[0].content
+
+def test_should_raise_error_when_json_file_invalid(testdata_dir):
+    parser = JSONParser(str(testdata_dir / "invalid.json"))
+    
+    with pytest.raises(ValueError, match="Invalid JSON"):
+        parser.parse()
+```
+
+### Example: Analyzer test with prompt validation
+
+Testing that the analyzer builds prompts correctly with custom criteria:
+
+```python
+def test_should_build_prompt_with_all_criteria(mock_settings):
+    mock_settings.criteria = Criteria(
+        forbidden_words=["badword1", "badword2"],
+        topics_to_exclude=["Political opinions", "Controversial statements"],
+        tone_requirements=["Professional language", "Respectful communication"],
+        additional_instructions="Flag harmful content",
+    )
+    
+    with patch("analyzer.settings", mock_settings), patch("analyzer.genai") as mock_genai:
+        mock_model = Mock()
+        mock_response = Mock()
+        mock_response.text = '{"decision": "KEEP", "reason": "OK"}'
+        mock_model.models.generate_content.return_value = mock_response
+        mock_genai.Client.return_value = mock_model
+        
+        analyzer = Gemini()
+        tweet = Tweet(id="123456789", content="This is a test tweet")
+        
+        analyzer.analyze(tweet)
+        
+        # Verify prompt contains all criteria
+        call_args = mock_model.models.generate_content.call_args
+        prompt = call_args.kwargs["contents"]
+        
+        assert "123456789" in prompt
+        assert "This is a test tweet" in prompt
+        assert "Political opinions" in prompt
+        assert "Professional language" in prompt
+        assert "badword1" in prompt
+        assert "badword2" in prompt
+        assert "Flag harmful content" in prompt
+```
+
+### Example: Checkpoint persistence test
+
+Testing that checkpoints are saved and loaded correctly:
+
+```python
+def test_should_save_and_load_checkpoint_value(tmp_path):
+    checkpoint_path = tmp_path / "checkpoint.txt"
+    
+    # Save checkpoint
+    with Checkpoint(str(checkpoint_path)) as cp:
+        cp.save(42)
+    
+    # Load checkpoint in new context
+    with Checkpoint(str(checkpoint_path)) as cp:
+        value = cp.load()
+    
+    assert value == 42
+
+def test_should_set_file_permissions_when_checkpoint_created(tmp_path):
+    checkpoint_path = tmp_path / "checkpoint.txt"
+    
+    with Checkpoint(str(checkpoint_path)) as cp:
+        cp.save(5)
+    
+    # Verify secure permissions (owner read/write only)
+    stat = os.stat(checkpoint_path)
+    mode = stat.st_mode & 0o777
+    assert mode == 0o600
+```
+
+## Working with test data
+
+### Using existing test data
+
+The `testdata/` directory contains sample files for testing:
+
+- **tweets.json** - Valid X archive format with 4 tweets
+- **tweets.csv** - Valid CSV format with 2 tweets
+- **empty.json** - Empty JSON array for testing edge cases
+- **invalid.json** - Malformed JSON for error testing
+
+### Creating custom test data
+
+Create test data programmatically for specific scenarios:
+
+```python
+def test_should_handle_special_characters(tmp_path):
+    # Create test CSV with special characters
+    special_csv = tmp_path / "special.csv"
+    with open(special_csv, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["id", "text"])
+        writer.writerow(["123", 'Tweet with, comma and "quotes"'])
+        writer.writerow(["456", "Tweet with\nnewline"])
+    
+    parser = CSVParser(str(special_csv))
+    tweets = parser.parse()
+    
+    assert len(tweets) == 2
+    assert tweets[0].content == 'Tweet with, comma and "quotes"'
+    assert tweets[1].content == "Tweet with\nnewline"
+```
+
+## Continuous integration
+
+### GitHub Actions setup
+
+To set up automated testing with GitHub Actions, create `.github/workflows/test.yml`:
+
+```yaml .github/workflows/test.yml
+name: Tests
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: |
+          pip install -e .
+          pip install pytest pytest-cov ruff
+      - name: Lint
+        run: ruff check .
+      - name: Format check
+        run: ruff format --check .
+      - name: Test
+        run: pytest --cov=src --cov-report=xml
+      - name: Upload coverage
+        uses: codecov/codecov-action@v3
+```
+
+## Best practices
+
+<AccordionGroup>
+  <Accordion title="Write tests first (TDD)">
+    Follow test-driven development:
+
+    1. Write a failing test that defines desired behavior
+    2. Run the test to verify it fails
+    3. Implement the minimal code to make it pass
+    4. Refactor while keeping tests green
+
+    ```python
+    # 1. Write failing test
+    def test_should_skip_retweets():
+        tweet = Tweet(id="1", content="RT @someone Test")
+        assert _is_retweet(tweet) == True
+    
+    # 2. Run test (it fails)
+    # 3. Implement feature
+    def _is_retweet(tweet: Tweet) -> bool:
+        return tweet.content.startswith("RT @")
+    
+    # 4. Run test (it passes)
+    ```
+  </Accordion>
+
+  <Accordion title="Test one thing at a time">
+    Each test should verify a single behavior:
+
+    ```python
+    # Good: Tests one scenario
+    def test_should_return_delete_when_forbidden_word_found():
+        # ...
+    
+    def test_should_return_keep_when_no_forbidden_words():
+        # ...
+    
+    # Bad: Tests multiple scenarios
+    def test_analyzer():
+        # Tests DELETE case
+        # Tests KEEP case
+        # Tests error case
+        # Too many concerns!
+    ```
+  </Accordion>
+
+  <Accordion title="Use descriptive assertions">
+    Make assertion failures informative:
+
+    ```python
+    # Good: Clear what's being tested
+    assert result.decision == Decision.DELETE
+    assert "testuser" in result.tweet_url
+    
+    # Bad: Unclear what failed
+    assert result
+    assert len(result.tweet_url) > 0
+    ```
+  </Accordion>
+
+  <Accordion title="Mock at the right boundaries">
+    Mock external dependencies, not internal logic:
+
+    ```python
+    # Good: Mock external API
+    @patch("analyzer.genai")
+    def test_analyzer(mock_genai):
+        # ...
+    
+    # Bad: Mock internal function
+    @patch("analyzer._build_prompt")
+    def test_analyzer(mock_prompt):
+        # This tests nothing useful!
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Next steps
+
+<Card title="Contributing guidelines" icon="code-pull-request" href="/development/contributing">
+  Learn how to contribute code, submit pull requests, and follow project conventions
+</Card>

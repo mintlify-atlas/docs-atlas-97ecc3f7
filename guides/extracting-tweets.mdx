@@ -1,0 +1,406 @@
+---
+title: Extracting tweets
+description: Learn how to extract and transform tweets from your X archive into a format ready for AI analysis
+---
+
+Before analyzing tweets, you need to extract them from your X (Twitter) archive export. This guide covers the entire extraction process.
+
+## Prerequisites
+
+<Steps>
+  <Step title="Request your X archive">
+    Go to X.com and request your data archive:
+
+    1. Navigate to **More** → **Settings and Privacy** → **Your Account**
+    2. Click **Download an archive of your data**
+    3. Verify your identity and confirm the request
+    4. Wait 24-48 hours for X to prepare your archive
+  </Step>
+
+  <Step title="Download and extract the archive">
+    Once ready, X will email you a download link:
+
+    ```bash
+    # Download the ZIP file from the email link
+    # Extract it to a temporary location
+    unzip twitter-archive.zip -d /tmp/twitter-archive
+    ```
+
+    The archive contains a `data` folder with your tweets in JSON format.
+  </Step>
+
+  <Step title="Copy tweets.json to your project">
+    Locate and copy the tweets file:
+
+    ```bash
+    # Create the data directory
+    mkdir -p data/tweets
+
+    # Copy tweets.json from the archive
+    cp /tmp/twitter-archive/data/tweets.json data/tweets/tweets.json
+    ```
+  </Step>
+</Steps>
+
+## Understanding the archive format
+
+The X archive uses a nested JSON structure. Here's what it looks like:
+
+```json tweets.json
+[
+  {
+    "tweet": {
+      "id_str": "1234567890123456789",
+      "full_text": "This is my tweet content",
+      "created_at": "Wed Jan 01 12:00:00 +0000 2020",
+      "retweet_count": "0",
+      "favorite_count": "5",
+      "lang": "en"
+    }
+  },
+  {
+    "tweet": {
+      "id_str": "9876543210987654321",
+      "full_text": "Another tweet here",
+      "created_at": "Thu Jan 02 14:30:00 +0000 2020",
+      "retweet_count": "2",
+      "favorite_count": "10",
+      "lang": "en"
+    }
+  }
+]
+```
+
+### Required fields
+
+The extraction process reads these fields from `storage.py:14-15`:
+
+<ParamField path="tweet.id_str" type="string" required>
+  The unique tweet ID as a string.
+
+  ```python
+  TWITTER_ARCHIVE_ID_FIELD = "id_str"
+  ```
+</ParamField>
+
+<ParamField path="tweet.full_text" type="string" required>
+  The complete tweet content (up to 280 characters).
+
+  ```python
+  TWITTER_ARCHIVE_TEXT_FIELD = "full_text"
+  ```
+</ParamField>
+
+<Warning>
+  If either field is missing, extraction will fail with:
+  ```
+  ValueError: Missing required field 'id_str' in data/tweets/tweets.json
+  ```
+</Warning>
+
+## Running the extraction
+
+Once your `tweets.json` is in place, run the extraction command:
+
+```bash
+python src/main.py extract-tweets
+```
+
+### What happens during extraction
+
+The extraction process (`application.py:47-62`) follows these steps:
+
+<Steps>
+  <Step title="Load JSON archive">
+    The `JSONParser` reads the archive file:
+
+    ```python
+    logger.info(f"Reading tweets from {settings.tweets_archive_path}")
+    parser = JSONParser(settings.tweets_archive_path)
+    tweets = parser.parse()
+    ```
+
+    Implementation in `storage.py:39-58`:
+    ```python
+    def parse(self) -> list[Tweet]:
+        try:
+            with open(self.file_path, encoding=FILE_ENCODING) as file:
+                data = json.load(file)
+                return [
+                    Tweet(
+                        id=item["tweet"][TWITTER_ARCHIVE_ID_FIELD],
+                        content=item["tweet"][TWITTER_ARCHIVE_TEXT_FIELD],
+                    )
+                    for item in data
+                ]
+        except FileNotFoundError as e:
+            raise FileNotFoundError(f"Tweet archive not found: {self.file_path}") from e
+    ```
+  </Step>
+
+  <Step title="Transform to CSV">
+    Tweets are converted to a simpler CSV format:
+
+    ```python
+    logger.info(f"Extracted {len(tweets)} tweets, writing to CSV")
+    with CSVWriter(settings.transformed_tweets_path) as writer:
+        writer.write_tweets(tweets)
+    ```
+
+    The `CSVWriter` creates a two-column format (`storage.py:161-170`):
+    ```python
+    def write_tweets(self, tweets: list[Tweet]) -> None:
+        if not self.header_written:
+            self.writer.writerow([TWEET_CSV_ID_COLUMN, TWEET_CSV_TEXT_COLUMN])
+            self.header_written = True
+
+        for tweet in tweets:
+            self.writer.writerow([tweet.id, tweet.content])
+    ```
+  </Step>
+
+  <Step title="Save transformed tweets">
+    The CSV is saved to `data/tweets/transformed/tweets.csv`:
+
+    ```python
+    logger.info(
+        f"Successfully wrote {len(tweets)} tweets to {settings.transformed_tweets_path}"
+    )
+    return Result(success=True, count=len(tweets))
+    ```
+  </Step>
+</Steps>
+
+### Expected output
+
+Successful extraction displays:
+
+```bash
+Extracting tweets from archive...
+2024-01-15 10:30:00 - application - INFO - Reading tweets from data/tweets/tweets.json
+2024-01-15 10:30:01 - application - INFO - Extracted 1523 tweets, writing to CSV
+2024-01-15 10:30:01 - application - INFO - Successfully wrote 1523 tweets to data/tweets/transformed/tweets.csv
+Successfully extracted 1523 tweets
+```
+
+## Output format
+
+The extracted CSV (`data/tweets/transformed/tweets.csv`) has this structure:
+
+```csv
+id,text
+1234567890123456789,"This is my tweet content"
+9876543210987654321,"Another tweet here"
+1122334455667788990,"RT @someone: This is a retweet"
+```
+
+<Info>
+  Retweets are included in the CSV but will be automatically skipped during analysis.
+</Info>
+
+## File permissions and security
+
+The tool sets secure file permissions on all output files:
+
+```python
+PRIVATE_FILE_MODE = 0o600  # Owner read/write only
+PRIVATE_DIR_MODE = 0o750  # Owner read/write/execute, group read/execute
+```
+
+From `storage.py:139-151`:
+```python
+def __enter__(self) -> "CSVWriter":
+    dir_path = os.path.dirname(self.file_path)
+    if dir_path:
+        os.makedirs(dir_path, mode=PRIVATE_DIR_MODE, exist_ok=True)
+
+    file_exists = os.path.exists(self.file_path)
+    self.header_written = self.append and file_exists
+
+    mode = "a" if self.append and file_exists else "w"
+    self.file = open(self.file_path, mode, encoding=FILE_ENCODING, newline="")
+    self.writer = csv.writer(self.file)
+
+    os.chmod(self.file_path, PRIVATE_FILE_MODE)
+    return self
+```
+
+<Tip>
+  Your tweet data is private! The tool ensures only you (the file owner) can read/write the CSV files.
+</Tip>
+
+## Troubleshooting extraction
+
+### File not found error
+
+```
+Error: Tweet archive not found: data/tweets/tweets.json
+```
+
+**Solution:** Verify the archive is in the correct location:
+
+```bash
+ls -la data/tweets/tweets.json
+```
+
+If missing, copy it from your X archive:
+
+```bash
+cp /path/to/twitter-archive/data/tweets.json data/tweets/tweets.json
+```
+
+### Invalid JSON format
+
+```
+Error: Invalid JSON in data/tweets/tweets.json: Expecting value: line 1 column 1 (char 0)
+```
+
+**Solution:** The file might be corrupted. Verify it's valid JSON:
+
+```bash
+python -m json.tool data/tweets/tweets.json | head -20
+```
+
+If invalid, re-download your X archive.
+
+### Missing required fields
+
+```
+Error: Missing required field 'full_text' in data/tweets/tweets.json
+```
+
+**Solution:** Your archive format might be outdated. The tool expects:
+
+```json
+[
+  {
+    "tweet": {
+      "id_str": "...",
+      "full_text": "..."
+    }
+  }
+]
+```
+
+Check if your archive uses `"text"` instead of `"full_text"`. If so, you'll need to modify `storage.py:15`:
+
+```python
+# Change this:
+TWITTER_ARCHIVE_TEXT_FIELD = "full_text"
+
+# To this:
+TWITTER_ARCHIVE_TEXT_FIELD = "text"
+```
+
+### Permission denied error
+
+```
+Error: Permission denied: data/tweets/transformed/tweets.csv
+```
+
+**Solution:** Ensure the directory is writable:
+
+```bash
+chmod -R u+w data/
+```
+
+## Verifying extraction results
+
+After extraction, verify the CSV was created correctly:
+
+```bash
+# Check file exists
+ls -lh data/tweets/transformed/tweets.csv
+
+# View first 10 tweets
+head -10 data/tweets/transformed/tweets.csv
+
+# Count total tweets (subtract 1 for header)
+wc -l data/tweets/transformed/tweets.csv
+```
+
+Example output:
+```
+-rw------- 1 user user 523K Jan 15 10:30 data/tweets/transformed/tweets.csv
+    1524 data/tweets/transformed/tweets.csv
+```
+
+<Info>
+  The line count includes the header row, so 1524 lines = 1523 tweets.
+</Info>
+
+## Re-extracting tweets
+
+If you need to re-extract (for example, after getting a new archive):
+
+```bash
+# Remove the old transformed CSV
+rm data/tweets/transformed/tweets.csv
+
+# Replace the archive
+cp /path/to/new/tweets.json data/tweets/tweets.json
+
+# Re-run extraction
+python src/main.py extract-tweets
+```
+
+<Warning>
+  Re-extracting will overwrite `tweets.csv`. If you've started analysis, you may also want to remove:
+  - `data/checkpoint.txt` (to restart from the beginning)
+  - `data/tweets/processed/results.csv` (to clear previous results)
+</Warning>
+
+## What gets extracted
+
+The extraction includes:
+
+- ✅ Original tweets
+- ✅ Replies to others
+- ✅ Retweets (but they're skipped during analysis)
+- ✅ Quote tweets
+- ✅ Tweets with media (text only is extracted)
+- ✅ Threads (each tweet is separate)
+
+The extraction does NOT include:
+
+- ❌ Deleted tweets
+- ❌ Tweets from suspended accounts
+- ❌ Direct messages
+- ❌ Likes/favorites
+- ❌ Media files (images, videos)
+- ❌ Tweet metadata (likes, retweets, dates)
+
+<Info>
+  Only the tweet ID and text content are needed for analysis. Other metadata is ignored.
+</Info>
+
+## Understanding the Tweet model
+
+Extracted tweets are stored as simple data objects from `models.py:13-19`:
+
+```python
+@dataclass(frozen=True)
+class Tweet:
+    id: str
+    content: str
+
+    def __repr__(self) -> str:
+        preview = self.content[:50] + "..." if len(self.content) > 50 else self.content
+        return f"Tweet(id={self.id!r}, content={preview!r})"
+```
+
+- `id`: The unique tweet identifier (used to construct URLs)
+- `content`: The full tweet text (up to 280 characters)
+
+## Next steps
+
+After successful extraction, you're ready to analyze your tweets:
+
+<CardGroup cols={2}>
+  <Card title="Analyze tweets" icon="brain" href="/guides/analyzing-tweets">
+    Run AI analysis on your extracted tweets
+  </Card>
+  <Card title="Customize criteria" icon="sliders" href="/guides/criteria-customization">
+    Fine-tune what gets flagged for deletion
+  </Card>
+</CardGroup>

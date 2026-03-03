@@ -1,0 +1,595 @@
+---
+title: FAQ
+description: Frequently asked questions about the Tweet Audit Tool
+---
+
+## General questions
+
+<AccordionGroup>
+  <Accordion title="Can I use a different AI model?">
+    Currently only Google Gemini models are supported. The tool is designed specifically for the Gemini API format and response structure.
+
+    **Supported models:**
+    - `gemini-2.5-flash` (default, recommended)
+    - `gemini-2.5-pro`
+    - Other Gemini model variants
+
+    To change models, update your `.env` file:
+    ```bash
+    GEMINI_MODEL=gemini-2.5-pro
+    ```
+
+    <Info>
+      To add support for other AI providers (OpenAI, Anthropic, etc.), you would need to modify `src/analyzer.py` to implement their specific API interfaces.
+    </Info>
+  </Accordion>
+
+  <Accordion title="Will this delete my tweets automatically?">
+    **No, absolutely not.** The tool is designed to be safe and non-destructive.
+
+    What it does:
+    - Analyzes tweets against your criteria
+    - Generates a CSV file with URLs of flagged tweets
+    - Provides recommendations
+
+    What it doesn't do:
+    - Never connects to Twitter/X API
+    - Never deletes anything automatically
+    - Requires manual review and deletion
+
+    You maintain complete control over what gets deleted. Review each flagged tweet by visiting the URL before deciding to delete it.
+  </Accordion>
+
+  <Accordion title="What if I disagree with a flagged tweet?">
+    That's perfectly fine! The tool provides suggestions based on your criteria, but you make the final decision.
+
+    **If you disagree with a flagged tweet:**
+    - Simply don't delete it
+    - Skip to the next flagged tweet
+    - You can mark it as reviewed in the CSV by changing the `deleted` column to `true` (to track your progress)
+
+    The AI analysis is a starting point, not a mandate. Your judgment is the final arbiter.
+  </Accordion>
+
+  <Accordion title="Can I analyze tweets without planning to delete them?">
+    Yes! The tool is useful for auditing your Twitter history even if you don't plan to delete anything.
+
+    **Use cases beyond deletion:**
+    - Content audit for professional branding
+    - Analyzing your posting patterns over time
+    - Identifying topics you've tweeted about
+    - Finding tweets that need editing or clarification
+    - Preparing for job applications or media appearances
+
+    The `results.csv` file serves as an audit report you can review without taking any action.
+  </Accordion>
+
+  <Accordion title="How accurate is the AI analysis?">
+    The accuracy depends heavily on how well you define your criteria in `config.json`.
+
+    **Factors affecting accuracy:**
+    - Clarity of your `topics_to_exclude`
+    - Specificity of `forbidden_words`
+    - Detail in `additional_instructions`
+    - The AI model's interpretation of context
+
+    **Best practices for accuracy:**
+    1. Start with a small sample (5-10 tweets)
+    2. Review the results
+    3. Refine your criteria
+    4. Test again on a larger sample
+    5. Iterate until you're satisfied
+
+    <Note>
+      AI models can misinterpret context, sarcasm, or nuance. Always manually review flagged tweets before deletion.
+    </Note>
+  </Accordion>
+</AccordionGroup>
+
+## Usage and workflow
+
+<AccordionGroup>
+  <Accordion title="How long does the analysis take?">
+    Analysis time depends on:
+    - Number of tweets
+    - API rate limiting
+    - Your `RATE_LIMIT_SECONDS` setting
+
+    **Estimates with default settings (1 req/sec):**
+    - 100 tweets: ~2 minutes
+    - 1,000 tweets: ~17 minutes
+    - 10,000 tweets: ~3 hours
+    - 50,000 tweets: ~14 hours
+
+    The tool automatically saves progress, so you can:
+    - Stop and resume at any time (Ctrl+C)
+    - Spread analysis over multiple days
+    - Run in the background
+
+    <Info>
+      Retweets are automatically skipped, so actual time may be less if you have many retweets.
+    </Info>
+  </Accordion>
+
+  <Accordion title="What happens if the process is interrupted?">
+    The tool has robust checkpoint system that saves progress after each batch.
+
+    **If interrupted by:**
+    - Ctrl+C
+    - System crash
+    - Network issues
+    - API quota exhaustion
+
+    **To resume:**
+    Simply run the analyze command again:
+    ```bash
+    python src/main.py analyze-tweets
+    ```
+
+    The tool will:
+    - Load the last checkpoint from `data/checkpoint.txt`
+    - Resume from exactly where it left off
+    - Append new results to `results.csv`
+    - Not re-process already analyzed tweets
+
+    <Note>
+      The checkpoint file tracks the index of the last processed tweet, ensuring you never lose progress.
+    </Note>
+  </Accordion>
+
+  <Accordion title="Can I adjust the batch size?">
+    Yes, you can modify the batch size in `src/config.py`:
+
+    ```python
+    batch_size: int = 10  # Default value
+    ```
+
+    **Batch size considerations:**
+
+    **Larger batches (20-50):**
+    - Faster overall processing
+    - Less frequent checkpoint saves
+    - More tweets to re-process if interrupted
+    - Higher memory usage
+
+    **Smaller batches (5-10):**
+    - Slower overall processing
+    - More frequent checkpoint saves
+    - Minimal loss if interrupted
+    - Lower memory usage
+
+    <Info>
+      The default of 10 tweets per batch provides a good balance between speed and reliability.
+    </Info>
+  </Accordion>
+
+  <Accordion title="How do I restart the analysis from scratch?">
+    If you want to re-analyze all tweets with updated criteria:
+
+    <Steps>
+      <Step title="Update your criteria">
+        Modify `config.json` with your new criteria
+      </Step>
+      
+      <Step title="Delete checkpoint and results">
+        ```bash
+        rm data/checkpoint.txt
+        rm data/tweets/processed/results.csv
+        ```
+      </Step>
+      
+      <Step title="Run analysis again">
+        ```bash
+        python src/main.py analyze-tweets
+        ```
+      </Step>
+    </Steps>
+
+    <Warning>
+      This will use additional API quota as all tweets will be re-analyzed. For large tweet volumes, consider testing new criteria on a small sample first.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="Are retweets analyzed?">
+    No, retweets are automatically skipped during analysis.
+
+    **Rationale:**
+    - Retweets represent content you shared, not created
+    - They start with "RT @username"
+    - Analyzing them would waste API quota
+    - You typically want to audit your original content
+
+    **What gets analyzed:**
+    - Original tweets
+    - Replies
+    - Quote tweets (your added commentary)
+    - Threads
+
+    See the code reference in `src/application.py:125-126`
+  </Accordion>
+</AccordionGroup>
+
+## Configuration and customization
+
+<AccordionGroup>
+  <Accordion title="What happens if I don't create config.json?">
+    The tool uses sensible defaults focused on professional content.
+
+    **Default criteria:**
+    ```json
+    {
+      "criteria": {
+        "forbidden_words": [],
+        "topics_to_exclude": [
+          "Profanity or unprofessional language",
+          "Personal attacks or insults",
+          "Outdated political opinions"
+        ],
+        "tone_requirements": [
+          "Professional language only",
+          "Respectful communication"
+        ],
+        "additional_instructions": "Flag any content that could harm professional reputation"
+      }
+    }
+    ```
+
+    You can start with defaults and create `config.json` later to refine your criteria.
+  </Accordion>
+
+  <Accordion title="How do forbidden_words work?">
+    `forbidden_words` performs exact word matching (case-insensitive).
+
+    **Example:**
+    ```json
+    "forbidden_words": ["damn", "wtf", "crypto"]
+    ```
+
+    **What gets flagged:**
+    - "Crypto is the future!" ✓ (contains "crypto")
+    - "Damn, that's interesting" ✓ (contains "damn")
+    - "wtf is happening" ✓ (contains "wtf")
+
+    **What doesn't get flagged:**
+    - "Cryptocurrency adoption" ✗ (different word)
+    - "Cryptography basics" ✗ (different word)
+    - "Damnation" ✗ (different word)
+
+    <Info>
+      Matching is word-boundary aware, so "crypto" won't match "cryptocurrency" unless you add it separately.
+    </Info>
+  </Accordion>
+
+  <Accordion title="What's the difference between topics_to_exclude and tone_requirements?">
+    Both guide the AI analysis but serve different purposes:
+
+    **topics_to_exclude:**
+    - Content categories you want to avoid
+    - Subject matter restrictions
+    - Thematic filters
+
+    Example:
+    ```json
+    "topics_to_exclude": [
+      "Political opinions",
+      "Cryptocurrency hype",
+      "Personal relationship drama"
+    ]
+    ```
+
+    **tone_requirements:**
+    - Stylistic and language rules
+    - Communication style preferences
+    - Manner of expression
+
+    Example:
+    ```json
+    "tone_requirements": [
+      "Professional language",
+      "No sarcasm",
+      "Constructive criticism only",
+      "No ALL CAPS"
+    ]
+    ```
+
+    Think of `topics_to_exclude` as "what you talk about" and `tone_requirements` as "how you say it."
+  </Accordion>
+
+  <Accordion title="How can I test my criteria before running on all tweets?">
+    Testing criteria on a small sample is highly recommended:
+
+    <Steps>
+      <Step title="Create a test archive">
+        Manually create a test `tweets.json` with 5-10 representative tweets:
+        ```json
+        [
+          {
+            "tweet": {
+              "id_str": "1234567890",
+              "full_text": "Your test tweet content here"
+            }
+          }
+        ]
+        ```
+      </Step>
+      
+      <Step title="Run extraction and analysis">
+        ```bash
+        python src/main.py extract-tweets
+        python src/main.py analyze-tweets
+        ```
+      </Step>
+      
+      <Step title="Review results">
+        Check `data/tweets/processed/results.csv` to see what was flagged
+      </Step>
+      
+      <Step title="Refine criteria">
+        Based on the results, adjust your `config.json`
+      </Step>
+      
+      <Step title="Repeat until satisfied">
+        Delete checkpoint and results, then test again with refined criteria
+      </Step>
+      
+      <Step title="Use your real archive">
+        Once satisfied, replace with your full archive and run the complete analysis
+      </Step>
+    </Steps>
+  </Accordion>
+
+  <Accordion title="Can I adjust the rate limiting?">
+    Yes, control API call frequency in your `.env` file:
+
+    ```bash
+    # Wait 2 seconds between each API call
+    RATE_LIMIT_SECONDS=2.0
+    ```
+
+    **When to adjust:**
+
+    **Increase delay (2.0 or higher) if:**
+    - You're hitting rate limits frequently
+    - You want to be conservative with API usage
+    - You're running analysis overnight (no rush)
+
+    **Decrease delay (0.5 or lower) if:**
+    - You have API quota to spare
+    - You want faster processing
+    - You're on a paid API tier with higher limits
+
+    <Warning>
+      Setting too low a value may trigger rate limit errors. The free tier allows 15 requests per minute (4-second intervals).
+    </Warning>
+  </Accordion>
+</AccordionGroup>
+
+## Cost and API limits
+
+<AccordionGroup>
+  <Accordion title="How much does it cost to analyze my tweets?">
+    Gemini 2.5 Flash is free for moderate usage.
+
+    **Free tier limits:**
+    - 15 requests per minute
+    - 1,500 requests per day
+    - Free input/output tokens for moderate use
+
+    **Cost estimates:**
+    - 1,000 tweets: Free (within daily limit)
+    - 5,000 tweets: Free (spread over 4 days)
+    - 10,000 tweets: Free (spread over 7 days)
+    - 50,000+ tweets: May need paid API tier
+
+    <Info>
+      Each tweet requires one API call. The checkpoint system lets you spread analysis over multiple days to stay within free limits.
+    </Info>
+  </Accordion>
+
+  <Accordion title="What happens if I exceed API quota?">
+    The tool handles quota limits gracefully:
+
+    **Automatic handling:**
+    1. Detects rate limit or quota errors (429, quota exceeded)
+    2. Retries up to 3 times with exponential backoff
+    3. Saves checkpoint before stopping
+    4. Shows error message
+
+    **To continue:**
+    - Wait until your quota resets (usually next day)
+    - Run the analyze command again
+    - Processing resumes from the checkpoint
+
+    **To avoid quota issues:**
+    - Increase `RATE_LIMIT_SECONDS` to slow down requests
+    - Spread analysis over multiple days
+    - Consider upgrading to a paid API tier for large volumes
+  </Accordion>
+
+  <Accordion title="Can I analyze 100,000+ tweets?">
+    Yes, but it requires planning:
+
+    **Challenges:**
+    - Takes multiple days with free tier limits
+    - Requires patience (spread over 67+ days at 1,500/day)
+    - Higher chance of interruptions
+
+    **Recommendations:**
+    1. **Use a paid API tier** for faster processing
+    2. **Filter before analyzing**: Modify the archive to include only recent tweets (e.g., last 3 years)
+    3. **Sample analysis**: Analyze every 10th tweet for a quick overview
+    4. **Run continuously**: Let it run in the background over weeks
+
+    The checkpoint system makes long-running analyses feasible, but a paid API tier is recommended for very large volumes.
+  </Accordion>
+</AccordionGroup>
+
+## Security and privacy
+
+<AccordionGroup>
+  <Accordion title="Is my data secure?">
+    The tool implements several security measures:
+
+    **File permissions:**
+    - All output files use `0o600` (owner-only read/write)
+    - Directories use `0o750` (owner read/write/execute, group read/execute)
+    - Prevents unauthorized access on shared systems
+
+    **Data handling:**
+    - API keys loaded from `.env` (never committed to git)
+    - `data/` directory is gitignored (won't be committed)
+    - No cloud storage or external logging
+    - All processing happens locally
+
+    **What's sent to Gemini:**
+    - Tweet text and ID only
+    - Your criteria from `config.json`
+    - No personal information beyond tweet content
+
+    See code references in `src/storage.py:8-9`
+  </Accordion>
+
+  <Accordion title="Should I commit config.json to git?">
+    It depends on whether your criteria contain sensitive information.
+
+    **Safe to commit if:**
+    - Generic professional criteria
+    - Standard content filtering rules
+    - Public repository
+
+    **Don't commit if:**
+    - Criteria reveal personal concerns
+    - Contains sensitive keywords or topics
+    - Private reasons for cleanup
+
+    <Note>
+      Consider adding `config.json` to `.gitignore` if your criteria are personal or sensitive.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What data is sent to Google Gemini?">
+    For each tweet analyzed, the tool sends:
+
+    **Sent to Gemini:**
+    - Tweet ID (e.g., "1234567890")
+    - Tweet text content
+    - Your criteria from `config.json`
+    - Structured prompt with analysis instructions
+
+    **Not sent:**
+    - Your API key (used for authentication only)
+    - Your X username
+    - Tweet metadata (likes, retweets, etc.)
+    - Other tweets in your archive
+    - Any local file paths
+
+    **Response received:**
+    - Decision: "DELETE" or "KEEP"
+    - Reason: Brief explanation
+
+    See the prompt builder in `src/analyzer.py:107-136`
+  </Accordion>
+</AccordionGroup>
+
+## Development and contributing
+
+<AccordionGroup>
+  <Accordion title="How do I run the tests?">
+    The project includes a test suite:
+
+    ```bash
+    # Install dev dependencies
+    pip install pytest pytest-cov
+
+    # Run all tests
+    pytest
+
+    # Run with coverage report
+    pytest --cov=src --cov-report=html
+
+    # Run specific test file
+    pytest tests/test_analyzer.py
+
+    # View coverage report
+    open htmlcov/index.html
+    ```
+  </Accordion>
+
+  <Accordion title="How can I contribute to the project?">
+    Contributions are welcome! Follow these steps:
+
+    <Steps>
+      <Step title="Fork the repository">
+        Fork [tweet-audit-impl](https://github.com/DanielPopoola/tweet-audit-impl) on GitHub
+      </Step>
+      
+      <Step title="Create a feature branch">
+        ```bash
+        git checkout -b feature/my-feature
+        ```
+      </Step>
+      
+      <Step title="Add tests">
+        Write tests for any new functionality
+      </Step>
+      
+      <Step title="Ensure tests pass">
+        ```bash
+        pytest
+        ruff check .
+        ruff format .
+        ```
+      </Step>
+      
+      <Step title="Submit a pull request">
+        Open a PR with a clear description of changes
+      </Step>
+    </Steps>
+  </Accordion>
+
+  <Accordion title="What's the project structure?">
+    Understanding the codebase:
+
+    ```
+    tweet-audit/
+    ├── src/
+    │   ├── main.py          # CLI entry point (commands)
+    │   ├── application.py   # Orchestration layer (workflow)
+    │   ├── analyzer.py      # Gemini AI integration
+    │   ├── storage.py       # File I/O operations
+    │   ├── config.py        # Configuration loading
+    │   └── models.py        # Data models (Tweet, Result, etc.)
+    ├── tests/
+    │   ├── test_*.py        # Unit tests
+    │   └── testdata/        # Test fixtures
+    ├── data/                # Runtime data (gitignored)
+    │   ├── tweets/
+    │   │   ├── tweets.json          # Original archive
+    │   │   ├── transformed/         # Extracted CSV
+    │   │   └── processed/           # Results CSV
+    │   └── checkpoint.txt           # Resume point
+    ├── .env                 # Your secrets (gitignored)
+    ├── config.json          # Your criteria
+    └── README.md
+    ```
+
+    **Key components:**
+    - `main.py`: CLI commands using Click
+    - `application.py`: Coordinates extraction and analysis
+    - `analyzer.py`: Gemini API client with retry logic
+    - `storage.py`: Parsers and writers for JSON/CSV
+    - `config.py`: Settings and criteria management
+  </Accordion>
+</AccordionGroup>
+
+## Still have questions?
+
+If your question isn't answered here:
+
+1. Check the [README](https://github.com/DanielPopoola/tweet-audit-impl/blob/main/README.md) for detailed documentation
+2. Search [existing issues](https://github.com/DanielPopoola/tweet-audit-impl/issues) on GitHub
+3. Open a [new issue](https://github.com/DanielPopoola/tweet-audit-impl/issues/new) with your question
+
+<Info>
+  When asking questions, provide context about your use case, tweet volume, and what you've already tried.
+</Info>

@@ -1,0 +1,839 @@
+---
+title: Design decisions
+description: Key architectural trade-offs, alternatives considered, and rationale behind major design choices
+---
+
+This guide explains the "why" behind major architectural decisions, the alternatives considered, and the trade-offs accepted.
+
+## Language: Python vs alternatives
+
+### Decision
+
+Use **Python** as the implementation language.
+
+### Rationale
+
+<Accordion title="Advantages">
+- **Fast prototyping:** Dynamic typing allows quick iteration
+- **AI ecosystem:** Google's `generativeai` SDK is Python-native
+- **Rich libraries:** Excellent support for CSV, JSON, HTTP
+- **Low barrier:** Most developers know Python
+- **Rapid experimentation:** Easy to test different prompts and approaches
+</Accordion>
+
+<Accordion title="Disadvantages">
+- **Runtime performance:** Slower than compiled languages
+- **Dependency management:** Requires Poetry/pip setup
+- **No single binary:** Can't distribute as standalone executable
+- **Type safety:** Runtime errors instead of compile-time
+- **Memory usage:** Higher overhead than Go/Rust
+</Accordion>
+
+### Alternatives considered
+
+<Tabs>
+  <Tab title="Go">
+    **Pros:**
+    - Single binary distribution
+    - Fast execution
+    - Low memory footprint
+    - Excellent concurrency support
+    
+    **Cons:**
+    - Unofficial Gemini SDK (lower quality)
+    - More boilerplate code
+    - Slower iteration on prompts
+    - Steeper learning curve
+    
+    **Verdict:** Too much setup friction for prototyping.
+  </Tab>
+  <Tab title="TypeScript/Node.js">
+    **Pros:**
+    - Good AI SDK support
+    - Fast async I/O
+    - Popular language
+    - Easy JSON handling
+    
+    **Cons:**
+    - Callback complexity for sequential flow
+    - Less mature for data processing
+    - NPM dependency hell
+    
+    **Verdict:** Python's AI ecosystem is stronger.
+  </Tab>
+  <Tab title="Rust">
+    **Pros:**
+    - Maximum performance
+    - Memory safety guarantees
+    - Single binary distribution
+    
+    **Cons:**
+    - Steep learning curve
+    - Slow iteration (compile times)
+    - Limited AI SDK options
+    - Overkill for I/O-bound workload
+    
+    **Verdict:** Premature optimization for this use case.
+  </Tab>
+</Tabs>
+
+<Info>
+**Conclusion:** Python's AI ecosystem maturity and rapid prototyping capabilities outweigh performance concerns for this I/O-bound, single-user tool.
+</Info>
+
+## Processing: Sequential vs concurrent
+
+### Decision
+
+Process tweets **sequentially** (one at a time) instead of concurrently.
+
+### Rationale
+
+<Tabs>
+  <Tab title="Sequential (chosen)">
+    **How it works:**
+    ```python
+    for tweet in tweets:
+        result = analyzer.analyze(tweet)  # Wait for completion
+        writer.write_result(result)
+    ```
+    
+    **Advantages:**
+    - Natural rate limiting (no complex throttling)
+    - Simple error handling (pause on first failure)
+    - Predictable behavior (linear execution)
+    - Lower memory usage (one request in flight)
+    - Easy to debug (clear execution trace)
+    
+    **Disadvantages:**
+    - Slower (5,000 tweets = ~1.5 hours at 1 req/sec)
+    - Doesn't utilize API concurrency limits
+    - Idle CPU during API waits
+  </Tab>
+  <Tab title="Concurrent (alternative)">
+    **How it would work:**
+    ```python
+    async with TaskGroup() as group:
+        for tweet in tweets:
+            group.create_task(analyzer.analyze(tweet))
+    ```
+    
+    **Advantages:**
+    - 5-10x faster (parallel API calls)
+    - Better resource utilization
+    - Maximizes API throughput
+    
+    **Disadvantages:**
+    - Complex rate limiting (need token bucket)
+    - Partial failure handling (what if tasks 3, 7, 12 fail?)
+    - Checkpoint synchronization (when to save?)
+    - Higher memory usage (many requests in flight)
+    - Race conditions in error paths
+  </Tab>
+</Tabs>
+
+### Trade-off analysis
+
+**Sequential processing trades speed for simplicity:**
+
+```
+Sequential: [Tweet 1] → [Tweet 2] → [Tweet 3] → [Tweet 4]
+            1s         1s         1s         1s = 4s total
+
+Concurrent: [Tweet 1]
+            [Tweet 2]
+            [Tweet 3]  → All complete in ~1s
+            [Tweet 4]
+```
+
+But concurrent adds complexity:
+
+```python
+# Sequential error handling
+try:
+    result = analyze(tweet)
+except APIError:
+    checkpoint.save(current_index)  # Simple!
+    raise
+
+# Concurrent error handling
+async with TaskGroup() as group:
+    tasks = [group.create_task(analyze(tweet)) for tweet in batch]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    
+    # Which tweets succeeded? Which failed?
+    # Where should checkpoint be?
+    # Should we retry only failed tweets?
+    # What if retry succeeds for some but not others?
+```
+
+<Warning>
+**Decision:** For a personal cleanup tool used occasionally, the simplicity benefit outweighs the speed penalty. Users can run overnight if needed.
+</Warning>
+
+## Storage: CSV vs database
+
+### Decision
+
+Use **CSV files** for storage instead of a database.
+
+### Rationale
+
+<CodeGroup>
+```csv CSV approach (chosen)
+tweet_url,deleted
+https://x.com/user/status/123,false
+https://x.com/user/status/456,false
+```
+
+```sql Database approach (alternative)
+CREATE TABLE results (
+  tweet_url TEXT PRIMARY KEY,
+  decision TEXT NOT NULL,
+  reason TEXT,
+  analyzed_at TIMESTAMP,
+  deleted BOOLEAN DEFAULT FALSE
+);
+```
+</CodeGroup>
+
+<Tabs>
+  <Tab title="CSV (chosen)">
+    **Advantages:**
+    - Zero setup (no database installation)
+    - Human-readable (open in Excel)
+    - Easy to share (email a file)
+    - Version control friendly
+    - Sufficient for up to 100K tweets
+    - Works offline completely
+    
+    **Disadvantages:**
+    - No query capabilities
+    - Must load entire file to read
+    - No referential integrity
+    - Limited data types
+    - No concurrent writes
+  </Tab>
+  <Tab title="SQLite (alternative)">
+    **Advantages:**
+    - SQL queries (find by date, reason, etc.)
+    - Indexes for fast lookup
+    - ACID transactions
+    - Better for large datasets
+    - Relational integrity
+    
+    **Disadvantages:**
+    - Requires SQLite installation
+    - Binary format (can't view in text editor)
+    - Schema migrations needed
+    - Harder to share/version
+    - Overkill for simple use case
+  </Tab>
+  <Tab title="PostgreSQL (alternative)">
+    **Advantages:**
+    - Full SQL capabilities
+    - Multi-user support
+    - Scalable to millions of tweets
+    - Advanced querying
+    
+    **Disadvantages:**
+    - Complex setup (server, credentials)
+    - Network dependency
+    - Massive overkill for CLI tool
+    - Harder deployment
+  </Tab>
+</Tabs>
+
+<Info>
+**Decision:** CSV simplicity and human-readability align perfectly with the tool's personal-use target. If users need advanced queries, they can import CSV into any database.
+</Info>
+
+## Architecture: Layered vs flat
+
+### Decision
+
+Use **three-layer architecture** (CLI → Application → Infrastructure) instead of flat structure.
+
+### Rationale
+
+<Accordion title="Layered (chosen)">
+**Structure:**
+```
+main.py (CLI) → application.py (Logic) → storage.py + analyzer.py
+```
+
+**Advantages:**
+- Clear separation of concerns
+- Easy to test (mock dependencies)
+- Reusable application layer
+- Swappable components (e.g., change AI provider)
+- Easier to understand (clear boundaries)
+
+**Example:**
+```python
+# main.py - only user interaction
+result = app.extract_tweets()
+print(f"Extracted {result.count} tweets")
+
+# application.py - only business logic
+def extract_tweets(self) -> Result:
+    tweets = parser.parse()
+    writer.write_tweets(tweets)
+    return Result(success=True, count=len(tweets))
+
+# storage.py - only file I/O
+def parse(self) -> list[Tweet]:
+    with open(self.file_path) as f:
+        return [Tweet(...) for item in json.load(f)]
+```
+</Accordion>
+
+<Accordion title="Flat (alternative)">
+**Structure:**
+```
+main.py - everything in one file
+```
+
+**Advantages:**
+- Fewer files (easier to navigate initially)
+- No import management
+- Faster to write initially
+
+**Disadvantages:**
+- God object (1000+ lines)
+- Hard to test (mock what?)
+- Tight coupling (can't swap components)
+- Difficult to understand
+- Changes cascade everywhere
+
+**Example of problems:**
+```python
+# How do you test this without calling Gemini API?
+def main():
+    with open("tweets.json") as f:  # Hardcoded path
+        tweets = json.load(f)
+    
+    client = genai.Client(api_key=os.getenv("KEY"))  # Real API
+    
+    for tweet in tweets:
+        response = client.generate(...)  # Calls real API in tests!
+        print(response)  # Print in library code?
+```
+</Accordion>
+
+<Note>
+**Decision:** Layered architecture provides testability and maintainability at the cost of a few extra files. For a tool with multiple workflows (extract, analyze), this pays off immediately.
+</Note>
+
+## Error handling: Exceptions vs Result type
+
+### Decision
+
+Use **Result type** at application layer, **exceptions** at infrastructure layer.
+
+### Rationale
+
+**Hybrid approach:**
+
+```python
+# Infrastructure layer: Raise exceptions
+class JSONParser:
+    def parse(self) -> list[Tweet]:
+        if not path.exists():
+            raise FileNotFoundError(f"File not found: {path}")
+        
+        try:
+            return [Tweet(...) for item in json.load(f)]
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON: {e}") from e
+
+# Application layer: Return Result
+class Application:
+    def extract_tweets(self) -> Result:
+        try:
+            tweets = parser.parse()
+            writer.write_tweets(tweets)
+            return Result(success=True, count=len(tweets))
+        except FileNotFoundError as e:
+            return Result(
+                success=False,
+                error_type="file_not_found",
+                error_message=str(e)
+            )
+
+# CLI layer: Handle Result
+result = app.extract_tweets()
+if not result.success:
+    print(f"Error: {result.error_message}", file=sys.stderr)
+    sys.exit(1)
+```
+
+<Tabs>
+  <Tab title="Advantages">
+    - **Clear boundaries:** Exceptions stay in infrastructure, Results flow up
+    - **Explicit errors:** CLI knows possible error types
+    - **No surprises:** Result type forces error handling
+    - **Easy testing:** Can assert on Result fields
+    - **User-friendly:** Map error_type to helpful messages
+  </Tab>
+  <Tab title="Alternatives">
+    **Pure exceptions:**
+    ```python
+    try:
+        app.extract_tweets()
+    except FileNotFoundError:
+        print("File not found")
+    except ValueError:
+        print("Invalid format")
+    except Exception:
+        print("Unknown error")
+    ```
+    
+    Problem: Every caller must know all possible exceptions.
+    
+    **Pure Result:**
+    ```python
+    result = parser.parse()  # Returns Result[List[Tweet], Error]
+    if not result.success:
+        return result.error
+    ```
+    
+    Problem: Verbose - every function returns Result.
+  </Tab>
+</Tabs>
+
+<Info>
+**Decision:** Hybrid approach balances ergonomics (exceptions for infrastructure) with explicitness (Result for business logic).
+</Info>
+
+## Checkpointing: Per-tweet vs per-batch
+
+### Decision
+
+Checkpoint **after each batch** (default: 10 tweets) instead of after each tweet.
+
+### Rationale
+
+<CodeGroup>
+```python Per-batch (chosen)
+for i in range(start_index, len(tweets), batch_size):
+    batch = tweets[i:i+batch_size]  # 10 tweets
+    
+    for tweet in batch:
+        result = analyzer.analyze(tweet)
+        writer.write_result(result)
+    
+    checkpoint.save(i + len(batch))  # Save once per 10 tweets
+```
+
+```python Per-tweet (alternative)
+for i, tweet in enumerate(tweets, start=start_index):
+    result = analyzer.analyze(tweet)
+    writer.write_result(result)
+    checkpoint.save(i + 1)  # Save after every tweet
+```
+</CodeGroup>
+
+**Trade-off analysis:**
+
+| Aspect | Per-Tweet | Per-Batch (10) |
+|--------|-----------|----------------|
+| **I/O overhead** | High (1 write/tweet) | Low (1 write/10 tweets) |
+| **Resume granularity** | Exact tweet | Batch start (lose up to 9) |
+| **Disk wear** | Higher | Lower |
+| **Checkpoint operations** | 5,000 for 5K tweets | 500 for 5K tweets |
+| **Rework on interrupt** | 0 tweets | 0-9 tweets |
+
+**Example scenario:**
+
+```
+Processing tweets 0-4999 (5,000 total)
+
+Per-tweet checkpoint:
+- Interrupted at tweet 3,427
+- Resume from tweet 3,427
+- Rework: 0 tweets
+- Checkpoint writes: 3,427
+
+Per-batch checkpoint (batch_size=10):
+- Interrupted at tweet 3,427 (batch 342, tweet 7/10)
+- Resume from tweet 3,420 (batch 342 start)
+- Rework: 7 tweets
+- Checkpoint writes: 342
+```
+
+<Note>
+**Decision:** Per-batch checkpointing reduces I/O by 10x with minimal rework penalty. Users can adjust `batch_size` to balance these concerns:
+- `batch_size=1` → per-tweet (no rework)
+- `batch_size=100` → less I/O, more rework
+</Note>
+
+## Configuration: Environment vs file vs CLI args
+
+### Decision
+
+Use **two-tier configuration:** environment variables (secrets) + optional JSON file (criteria).
+
+### Rationale
+
+<Tabs>
+  <Tab title="Environment (.env)">
+    **For secrets and runtime settings:**
+    
+    ```bash .env
+    GEMINI_API_KEY=sk-abc123...
+    X_USERNAME=johndoe
+    RATE_LIMIT_SECONDS=1.0
+    GEMINI_MODEL=gemini-2.5-flash
+    ```
+    
+    **Advantages:**
+    - Secrets never committed to git
+    - Easy to override (export RATE_LIMIT_SECONDS=0.5)
+    - Standard practice (12-factor app)
+    - Works with .env file or actual env vars
+    
+    **Use for:**
+    - API keys
+    - Usernames
+    - Rate limits
+    - Model selection
+  </Tab>
+  <Tab title="Config file (config.json)">
+    **For sharable criteria:**
+    
+    ```json config.json
+    {
+      "criteria": {
+        "topics_to_exclude": [
+          "Profanity",
+          "Politics"
+        ],
+        "tone_requirements": [
+          "Professional only"
+        ]
+      }
+    }
+    ```
+    
+    **Advantages:**
+    - Can be committed to git
+    - Easy to share with team
+    - Supports complex structures
+    - Optional (falls back to defaults)
+    
+    **Use for:**
+    - Analysis criteria
+    - Content rules
+    - Prompt customization
+  </Tab>
+  <Tab title="CLI args (not used)">
+    **Alternative: Command-line arguments**
+    
+    ```bash
+    python main.py analyze-tweets \
+      --api-key sk-abc123 \
+      --rate-limit 1.0 \
+      --exclude "Profanity" \
+      --exclude "Politics"
+    ```
+    
+    **Disadvantages:**
+    - API keys visible in process list (security risk)
+    - Verbose for complex config
+    - Hard to share (can't "commit" args)
+    - No good defaults
+    
+    **Verdict:** Fine for simple flags, bad for secrets and complex config.
+  </Tab>
+</Tabs>
+
+<Warning>
+**Security:** Never put API keys in CLI args (visible in `ps aux`) or in files committed to git.
+</Warning>
+
+## Retry logic: Exponential backoff vs fixed delay
+
+### Decision
+
+Use **exponential backoff** for retry delays instead of fixed delays.
+
+### Rationale
+
+<CodeGroup>
+```python Exponential backoff (chosen)
+delay = initial_delay * (2 ** attempt)
+
+# Attempt 1: immediate
+# Attempt 2: wait ~1 second
+# Attempt 3: wait ~2 seconds
+# Attempt 4: wait ~4 seconds
+```
+
+```python Fixed delay (alternative)
+delay = 1.0
+
+# Attempt 1: immediate  
+# Attempt 2: wait 1 second
+# Attempt 3: wait 1 second
+# Attempt 4: wait 1 second
+```
+</CodeGroup>
+
+**Why exponential wins:**
+
+<Tabs>
+  <Tab title="Server overload scenario">
+    **Problem:** Gemini API returns 503 (service unavailable)
+    
+    **Fixed delay behavior:**
+    ```
+    t=0s:  Request fails (503)
+    t=1s:  Retry fails (503) - server still overloaded
+    t=2s:  Retry fails (503) - server still overloaded
+    t=3s:  Retry fails (503) - give up
+    ```
+    
+    **Exponential backoff behavior:**
+    ```
+    t=0s:  Request fails (503)
+    t=1s:  Retry fails (503)
+    t=3s:  Retry fails (503)
+    t=7s:  Retry succeeds - server recovered
+    ```
+    
+    Exponential gives server more time to recover.
+  </Tab>
+  <Tab title="Rate limit scenario">
+    **Problem:** Hit API rate limit (429)
+    
+    **Fixed delay behavior:**
+    ```
+    Send 10 requests in 1 second → rate limited
+    Wait 1 second
+    Send 10 more requests → rate limited again
+    ```
+    
+    **Exponential backoff behavior:**
+    ```
+    Send 10 requests → rate limited
+    Wait 1s, then 2s, then 4s
+    Rate limit window expires
+    Resume successfully
+    ```
+  </Tab>
+</Tabs>
+
+**Implementation:**
+
+```python analyzer.py
+for attempt in range(max_retries):
+    try:
+        return func(*args, **kwargs)
+    except Exception as e:
+        if not is_retryable(e) or attempt == max_retries - 1:
+            raise
+        
+        # Exponential backoff with jitter
+        sleep_time = initial_delay * (2 ** attempt) + (time.time() % 1)
+        time.sleep(sleep_time)
+```
+
+<Info>
+**Jitter** (`time.time() % 1`) adds randomness to prevent thundering herd (many clients retrying at exact same time).
+</Info>
+
+## Immutability: Frozen dataclasses vs mutable
+
+### Decision
+
+Use **`@dataclass(frozen=True)`** for all data models.
+
+### Rationale
+
+<CodeGroup>
+```python Frozen (chosen)
+@dataclass(frozen=True)
+class Tweet:
+    id: str
+    content: str
+
+# Immutable - cannot be modified
+tweet = Tweet(id="123", content="Hello")
+tweet.content = "Bye"  # Error: FrozenInstanceError
+```
+
+```python Mutable (alternative)
+@dataclass
+class Tweet:
+    id: str
+    content: str
+
+# Mutable - can be modified
+tweet = Tweet(id="123", content="Hello")
+tweet.content = "Bye"  # Allowed
+```
+</CodeGroup>
+
+**Why immutability matters:**
+
+<Accordion title="Prevents accidental modification">
+```python
+# Bad: Silent bug with mutable data
+def process_tweets(tweets: list[Tweet]):
+    for tweet in tweets:
+        tweet.content = sanitize(tweet.content)  # Modifies original!
+    return tweets
+
+# Good: Compiler error with frozen data
+def process_tweets(tweets: list[Tweet]):
+    for tweet in tweets:
+        tweet.content = sanitize(tweet.content)  # FrozenInstanceError!
+    return tweets
+
+# Correct: Create new objects
+def process_tweets(tweets: list[Tweet]):
+    return [
+        Tweet(id=t.id, content=sanitize(t.content))
+        for t in tweets
+    ]
+```
+</Accordion>
+
+<Accordion title="Makes bugs obvious">
+With mutable data, bugs are silent:
+```python
+tweets = [Tweet(id="1", content="Original")]
+analyze(tweets)  # Accidentally modifies content
+print(tweets[0].content)  # "Modified" - surprise!
+```
+
+With frozen data, bugs crash immediately:
+```python
+tweets = [Tweet(id="1", content="Original")]
+analyze(tweets)  # FrozenInstanceError - fix the bug!
+```
+</Accordion>
+
+<Accordion title="Thread-safe by design">
+Immutable objects can be safely shared across threads:
+```python
+tweet = Tweet(id="1", content="Hello")
+
+# Safe: No locks needed
+Thread(target=process, args=(tweet,)).start()
+Thread(target=analyze, args=(tweet,)).start()
+```
+
+Mutable objects require synchronization:
+```python
+tweet = Tweet(id="1", content="Hello")
+lock = Lock()
+
+# Required: Protect with locks
+with lock:
+    process(tweet)
+```
+</Accordion>
+
+<Note>
+**Trade-off:** Creating new objects instead of modifying requires more memory. For our use case (tweets are small, processed one at a time), this is negligible.
+</Note>
+
+## Output: All tweets vs deletion candidates only
+
+### Decision
+
+Results CSV contains **only tweets marked for deletion**, not all analyzed tweets.
+
+### Rationale
+
+<CodeGroup>
+```python Deletion-only (chosen)
+if result.decision == Decision.DELETE:
+    writer.write_result(result)
+# KEEP decisions are not written
+```
+
+```python All-tweets (alternative)
+writer.write_result(result)  # Write every decision
+```
+</CodeGroup>
+
+**Trade-off analysis:**
+
+| Aspect | Deletion-Only | All-Tweets |
+|--------|---------------|------------|
+| **File size** | Small (5-10% of tweets) | Large (100% of tweets) |
+| **Focus** | Action items only | Complete audit trail |
+| **Review time** | Fast (50 tweets to review) | Slow (5,000 tweets to review) |
+| **Audit trail** | Lost (can't see KEEP decisions) | Complete (can review later) |
+| **Use case** | "What should I delete?" | "Why did you KEEP tweet X?" |
+
+**Example:**
+
+```csv Deletion-only output (50 rows)
+tweet_url,deleted
+https://x.com/user/status/123,false
+https://x.com/user/status/456,false
+...
+```
+
+vs
+
+```csv All-tweets output (5,000 rows)
+tweet_url,decision,reason,deleted
+https://x.com/user/status/1,KEEP,"Professional tone",N/A
+https://x.com/user/status/2,KEEP,"Appropriate content",N/A
+https://x.com/user/status/3,DELETE,"Contains profanity",false
+...
+```
+
+<Info>
+**Decision:** Deletion-only output aligns with the tool's purpose (cleanup). Users want a focused checklist, not a full audit trail. If they need to review KEEP decisions, they can re-run the analysis.
+</Info>
+
+## Summary of key trade-offs
+
+<CardGroup cols={2}>
+  <Card title="Speed vs simplicity" icon="gauge">
+    **Chose:** Simplicity (sequential processing)
+    
+    **Trade-off:** 10x slower, but easier to debug and maintain
+  </Card>
+  <Card title="Features vs deployment" icon="box">
+    **Chose:** Deployment (CSV over database)
+    
+    **Trade-off:** Fewer features, but zero setup required
+  </Card>
+  <Card title="Performance vs safety" icon="shield">
+    **Chose:** Safety (immutable data, frequent checkpoints)
+    
+    **Trade-off:** Higher memory and I/O, but no data loss
+  </Card>
+  <Card title="Flexibility vs clarity" icon="sliders">
+    **Chose:** Clarity (layered architecture)
+    
+    **Trade-off:** More files, but clearer responsibilities
+  </Card>
+</CardGroup>
+
+## When to revisit these decisions
+
+These decisions are appropriate for the current use case (personal cleanup tool, occasional use, up to 50K tweets). Consider alternatives if:
+
+- **Processing >100K tweets regularly** → Use concurrent processing, database storage
+- **Multiple users** → Add job queue, user management
+- **Real-time requirements** → Stream processing, WebSocket updates
+- **Production SaaS** → All of the above + monitoring, rate limiting per user, etc.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Architecture overview" icon="diagram-project" href="/architecture/overview">
+    Review the high-level system design
+  </Card>
+  <Card title="Component details" icon="cubes" href="/architecture/components">
+    Dive into implementation specifics
+  </Card>
+</CardGroup>

@@ -1,0 +1,636 @@
+---
+title: Resume interrupted analysis
+description: Learn how the checkpoint system works and how to safely resume analysis after interruptions or errors
+---
+
+The Tweet Audit Tool includes an automatic checkpoint system that saves progress after each batch. This allows you to safely interrupt and resume analysis without reprocessing tweets.
+
+## How checkpoints work
+
+The checkpoint system tracks which tweets have been processed using a simple index counter.
+
+### Checkpoint file
+
+Progress is saved to `data/checkpoint.txt`, which contains a single integer:
+
+```txt data/checkpoint.txt
+120
+```
+
+This means tweets 0-119 have been processed, and the next run will start at tweet 120.
+
+### Implementation
+
+From `storage.py:84-129`, the `Checkpoint` class manages state:
+
+```python
+class Checkpoint:
+    def __init__(self, file_path: str) -> None:
+        self.path = file_path
+        self.file = None
+
+    def load(self) -> int:
+        """Load checkpoint position, returns 0 if file doesn't exist"""
+        if not self.file:
+            raise RuntimeError("Checkpoint file is not open")
+
+        self.file.seek(0)
+        content = self.file.read().strip()
+
+        if not content:
+            return 0
+
+        try:
+            return int(content)
+        except ValueError as e:
+            raise ValueError(
+                f"Corrupted checkpoint file {self.path}: expected integer, got '{content}'"
+            ) from e
+
+    def save(self, tweet_index: int) -> None:
+        """Save current position to checkpoint file"""
+        if not self.file:
+            raise RuntimeError("Checkpoint file is not open")
+
+        self.file.seek(0)
+        self.file.truncate()
+        self.file.write(str(tweet_index))
+        self.file.flush()
+```
+
+## When checkpoints are saved
+
+Checkpoints are saved after every batch completes. From `application.py:77-117`:
+
+```python
+with Checkpoint(settings.checkpoint_path) as checkpoint:
+    start_index = checkpoint.load()
+    logger.info(f"Resuming from tweet index {start_index}")
+
+    with CSVWriter(settings.processed_results_path, append=True) as writer:
+        for i in range(start_index, len(tweets), settings.batch_size):
+            batch = tweets[i : i + settings.batch_size]
+            # ... process batch ...
+
+            # Checkpoint saved after each batch
+            checkpoint.save(i + len(batch))
+            logger.info(f"Checkpoint saved at index {i + len(batch)}")
+```
+
+<Info>
+  With the default batch size of 10, checkpoints are saved every 10 tweets.
+</Info>
+
+## Resuming analysis
+
+To resume an interrupted analysis, simply run the same command again:
+
+```bash
+python src/main.py analyze-tweets
+```
+
+### What happens on resume
+
+<Steps>
+  <Step title="Load checkpoint position">
+    The tool reads the last saved position:
+
+    ```python
+    start_index = checkpoint.load()
+    logger.info(f"Resuming from tweet index {start_index}")
+    ```
+
+    Output:
+    ```
+    2024-01-15 12:30:00 - application - INFO - Resuming from tweet index 120
+    ```
+  </Step>
+
+  <Step title="Open results file in append mode">
+    Previous results are preserved:
+
+    ```python
+    with CSVWriter(settings.processed_results_path, append=True) as writer:
+    ```
+
+    From `storage.py:132-152`:
+    ```python
+    def __enter__(self) -> "CSVWriter":
+        file_exists = os.path.exists(self.file_path)
+        self.header_written = self.append and file_exists
+
+        mode = "a" if self.append and file_exists else "w"
+        self.file = open(self.file_path, mode, encoding=FILE_ENCODING, newline="")
+    ```
+  </Step>
+
+  <Step title="Continue from checkpoint">
+    Processing resumes from the saved position:
+
+    ```python
+    for i in range(start_index, len(tweets), settings.batch_size):
+        batch = tweets[i : i + settings.batch_size]
+    ```
+
+    Output:
+    ```
+    2024-01-15 12:30:01 - application - INFO - Processing batch 13/153 (tweets 121-130 of 1523)
+    ```
+  </Step>
+</Steps>
+
+## Interruption scenarios
+
+The checkpoint system handles various interruption types:
+
+### Manual interruption (Ctrl+C)
+
+Safely stop analysis at any time:
+
+```bash
+python src/main.py analyze-tweets
+# Press Ctrl+C during processing
+^C
+```
+
+The last completed batch is saved. Resume with:
+
+```bash
+python src/main.py analyze-tweets
+```
+
+<Tip>
+  Wait for the current batch to finish before pressing Ctrl+C. The checkpoint is saved after batch completion.
+</Tip>
+
+### System crash or power loss
+
+If the system crashes unexpectedly:
+
+1. Restart your computer
+2. Navigate to the project directory
+3. Run the analysis command again:
+
+```bash
+python src/main.py analyze-tweets
+```
+
+You'll lose progress on the in-flight batch, but all previous batches are saved.
+
+### API rate limit exceeded
+
+When hitting Gemini API limits:
+
+```
+Failed to analyze tweet 123456: 429 Quota exceeded
+```
+
+The tool stops with an error. Resume later:
+
+```bash
+# Wait for quota to reset (usually 24 hours)
+# Then resume
+python src/main.py analyze-tweets
+```
+
+### API key invalid or expired
+
+If your API key becomes invalid during analysis:
+
+```
+Error: Invalid API key
+```
+
+<Steps>
+  <Step title="Update your API key">
+    Fix the key in `.env`:
+
+    ```bash
+    GEMINI_API_KEY=your_new_api_key_here
+    ```
+  </Step>
+
+  <Step title="Resume analysis">
+    No need to restart from scratch:
+
+    ```bash
+    python src/main.py analyze-tweets
+    ```
+  </Step>
+</Steps>
+
+### Network connectivity issues
+
+If network drops during processing:
+
+1. Reconnect to the internet
+2. Run the analysis command again
+3. The retry logic (from `analyzer.py:11-49`) handles transient errors automatically:
+
+```python
+@retry_with_backoff(max_retries=3, initial_delay=1.0)
+def analyze(self, tweet: Tweet) -> AnalysisResult:
+    # Automatically retries on connection errors
+```
+
+## Checkpoint file operations
+
+### Viewing checkpoint status
+
+Check current progress:
+
+```bash
+# View checkpoint position
+cat data/checkpoint.txt
+
+# Example output: 120 (means 120 tweets processed)
+```
+
+Calculate percentage complete:
+
+```bash
+# Count total tweets
+total=$(wc -l < data/tweets/transformed/tweets.csv)
+total=$((total - 1))  # Subtract header
+
+# Get checkpoint position
+processed=$(cat data/checkpoint.txt)
+
+# Calculate percentage
+echo "scale=2; $processed * 100 / $total" | bc
+# Example output: 7.87 (7.87% complete)
+```
+
+### Manually modifying checkpoint
+
+You can manually edit the checkpoint for specific scenarios:
+
+<Tabs>
+  <Tab title="Restart from beginning">
+    Delete or zero out the checkpoint:
+
+    ```bash
+    # Option 1: Delete checkpoint
+    rm data/checkpoint.txt
+
+    # Option 2: Reset to 0
+    echo "0" > data/checkpoint.txt
+    ```
+
+    <Warning>
+      This will reprocess all tweets. If you've already saved results, you may want to delete `results.csv` too.
+    </Warning>
+  </Tab>
+
+  <Tab title="Skip problematic tweets">
+    If a specific tweet causes persistent errors:
+
+    ```bash
+    # Skip to tweet 130 (skipping tweets 120-129)
+    echo "130" > data/checkpoint.txt
+
+    # Resume analysis
+    python src/main.py analyze-tweets
+    ```
+  </Tab>
+
+  <Tab title="Jump to specific position">
+    Process a specific range:
+
+    ```bash
+    # Start at tweet 500
+    echo "500" > data/checkpoint.txt
+
+    # Process tweets 500-end
+    python src/main.py analyze-tweets
+    ```
+  </Tab>
+</Tabs>
+
+### Checkpoint file permissions
+
+Checkpoints are created with secure permissions:
+
+```python
+PRIVATE_FILE_MODE = 0o600  # Owner read/write only
+```
+
+From `storage.py:89-96`:
+```python
+def __enter__(self) -> "Checkpoint":
+    dir_path = os.path.dirname(self.path)
+    if dir_path:
+        os.makedirs(dir_path, mode=PRIVATE_DIR_MODE, exist_ok=True)
+
+    self.file = open(self.path, "a+", encoding=FILE_ENCODING)
+    os.chmod(self.path, PRIVATE_FILE_MODE)
+    return self
+```
+
+## Results file append behavior
+
+The results CSV is opened in append mode during resume:
+
+```python
+with CSVWriter(settings.processed_results_path, append=True) as writer:
+```
+
+This means:
+- ✅ Previous results are preserved
+- ✅ New results are added to the end
+- ✅ No duplicates (each tweet processed once)
+- ✅ Header written only if file doesn't exist
+
+From `storage.py:172-181`:
+```python
+def write_result(self, result: AnalysisResult) -> None:
+    if not self.writer:
+        raise RuntimeError("CSVWriter is not open")
+
+    if not self.header_written:
+        self.writer.writerow([RESULT_CSV_URL_COLUMN, RESULT_CSV_DELETED_COLUMN])
+        self.header_written = True
+
+    self.writer.writerow([result.tweet_url, CSV_BOOL_FALSE])
+    self.file.flush()
+```
+
+## Troubleshooting checkpoints
+
+### Checkpoint file corrupted
+
+```
+Error: Corrupted checkpoint file data/checkpoint.txt: expected integer, got 'abc'
+```
+
+**Solution:** Delete and restart:
+
+```bash
+rm data/checkpoint.txt
+python src/main.py analyze-tweets
+```
+
+### Checkpoint doesn't match results
+
+If checkpoint says 100 but you only have 50 results:
+
+**Cause:** Retweets are skipped but still count toward checkpoint position.
+
+From `application.py:94-96`:
+```python
+for tweet in batch:
+    if _is_retweet(tweet):
+        continue  # Skip but checkpoint advances
+```
+
+**Solution:** This is normal behavior. The checkpoint tracks tweet index, not result count.
+
+### Resume starts over instead of continuing
+
+**Cause:** Checkpoint file doesn't exist or is empty.
+
+**Check:**
+```bash
+ls -la data/checkpoint.txt
+cat data/checkpoint.txt
+```
+
+**Solution:** Verify the checkpoint was saved during previous run. Check logs for:
+```
+INFO - Checkpoint saved at index 10
+```
+
+### Results have duplicates after resume
+
+If you see duplicate tweets in `results.csv`:
+
+**Cause:** Manually modified checkpoint to reprocess already-analyzed tweets.
+
+**Solution:** Deduplicate the results:
+
+```bash
+# Create backup
+cp data/tweets/processed/results.csv results-backup.csv
+
+# Remove duplicates (keep first occurrence)
+awk '!seen[$1]++' results-backup.csv > data/tweets/processed/results.csv
+```
+
+## Best practices
+
+<AccordionGroup>
+  <Accordion title="Let batches complete">
+    For safest checkpointing:
+
+    - Wait for "Checkpoint saved" log before interrupting
+    - Don't force-kill the process mid-batch
+    - Use Ctrl+C for graceful shutdown
+
+    ```bash
+    # ✅ Good: Wait for log
+    2024-01-15 12:30:10 - application - INFO - Checkpoint saved at index 120
+    # Now safe to press Ctrl+C
+
+    # ❌ Bad: Kill immediately
+    kill -9 <pid>  # May lose batch progress
+    ```
+  </Accordion>
+
+  <Accordion title="Monitor progress regularly">
+    Check checkpoint periodically during long runs:
+
+    ```bash
+    # In another terminal while analysis runs
+    watch -n 30 'cat data/checkpoint.txt'
+
+    # Or check progress percentage
+    watch -n 30 'echo "scale=1; $(cat data/checkpoint.txt) * 100 / 1523" | bc'
+    ```
+  </Accordion>
+
+  <Accordion title="Backup before manual edits">
+    Before modifying checkpoint or results:
+
+    ```bash
+    # Backup everything
+    cp data/checkpoint.txt checkpoint-backup.txt
+    cp data/tweets/processed/results.csv results-backup.csv
+
+    # Now safe to experiment
+    echo "500" > data/checkpoint.txt
+    ```
+  </Accordion>
+
+  <Accordion title="Use appropriate batch sizes">
+    Balance checkpoint frequency vs. performance:
+
+    ```python
+    # In config.py:
+    batch_size: int = 10  # More frequent checkpoints
+    # vs
+    batch_size: int = 50  # Less frequent checkpoints
+    ```
+
+    Trade-offs:
+    - **Smaller batches**: More checkpoints, safer resume, slower processing
+    - **Larger batches**: Fewer checkpoints, riskier resume, faster processing
+  </Accordion>
+</AccordionGroup>
+
+## Advanced checkpoint scenarios
+
+### Processing in stages
+
+Analyze your archive in multiple sessions:
+
+```bash
+# Day 1: Process first 500 tweets
+python src/main.py analyze-tweets
+# Let it run to ~500, then Ctrl+C
+
+# Day 2: Continue from 500
+python src/main.py analyze-tweets
+# Process another 500
+
+# Day 3: Finish remaining tweets
+python src/main.py analyze-tweets
+```
+
+### Parallel processing (not recommended)
+
+<Warning>
+  The checkpoint system does NOT support parallel processing. Running multiple analysis processes simultaneously will cause conflicts.
+</Warning>
+
+If you need faster processing:
+
+1. Split your CSV into multiple files manually
+2. Create separate project directories for each
+3. Run separate analysis processes
+4. Combine results afterward
+
+```bash
+# Don't do this (will conflict):
+python src/main.py analyze-tweets &  # Process 1
+python src/main.py analyze-tweets &  # Process 2 (conflicts!)
+
+# Instead, split manually:
+head -n 500 tweets.csv > tweets-part1.csv
+tail -n +501 tweets.csv > tweets-part2.csv
+# Process each in separate directory
+```
+
+### Resuming after config changes
+
+If you modify `config.json` during analysis:
+
+<Tabs>
+  <Tab title="Continue with new config">
+    Resume with updated criteria:
+
+    ```bash
+    # Edit config.json
+    vim config.json
+
+    # Resume - new criteria applies to remaining tweets
+    python src/main.py analyze-tweets
+    ```
+
+    <Info>
+      Already-processed tweets keep their original decisions. Only new tweets use the updated criteria.
+    </Info>
+  </Tab>
+
+  <Tab title="Restart with new config">
+    Reprocess everything with new criteria:
+
+    ```bash
+    # Edit config.json
+    vim config.json
+
+    # Remove old results
+    rm data/checkpoint.txt
+    rm data/tweets/processed/results.csv
+
+    # Start fresh
+    python src/main.py analyze-tweets
+    ```
+  </Tab>
+</Tabs>
+
+## Monitoring long-running analysis
+
+For large tweet archives (10,000+ tweets), monitor progress:
+
+<CodeGroup>
+
+```bash Progress script
+#!/bin/bash
+# save as check_progress.sh
+
+TOTAL=$(wc -l < data/tweets/transformed/tweets.csv)
+TOTAL=$((TOTAL - 1))
+PROCESSED=$(cat data/checkpoint.txt 2>/dev/null || echo "0")
+FLAGGED=$(wc -l < data/tweets/processed/results.csv 2>/dev/null || echo "0")
+FLAGGED=$((FLAGGED > 0 ? FLAGGED - 1 : 0))
+
+PERCENT=$(echo "scale=1; $PROCESSED * 100 / $TOTAL" | bc)
+
+echo "Progress: $PROCESSED / $TOTAL tweets ($PERCENT%)"
+echo "Flagged for deletion: $FLAGGED tweets"
+```
+
+```bash Live monitoring
+# Watch progress in real-time
+watch -n 10 './check_progress.sh'
+
+# Example output (updates every 10 seconds):
+# Progress: 847 / 1523 tweets (55.6%)
+# Flagged for deletion: 23 tweets
+```
+
+</CodeGroup>
+
+## Checkpoint architecture
+
+The checkpoint system uses a context manager pattern for safe file handling:
+
+```python
+with Checkpoint(settings.checkpoint_path) as checkpoint:
+    start_index = checkpoint.load()
+    # ... process tweets ...
+    checkpoint.save(new_index)
+```
+
+From `storage.py:89-102`:
+```python
+def __enter__(self) -> "Checkpoint":
+    dir_path = os.path.dirname(self.path)
+    if dir_path:
+        os.makedirs(dir_path, mode=PRIVATE_DIR_MODE, exist_ok=True)
+
+    self.file = open(self.path, "a+", encoding=FILE_ENCODING)
+    os.chmod(self.path, PRIVATE_FILE_MODE)
+    return self
+
+def __exit__(self, exc_type, exc_value, traceback) -> bool:
+    if self.file:
+        self.file.close()
+        self.file = None
+    return False
+```
+
+<Info>
+  The context manager ensures the file is properly closed even if an error occurs.
+</Info>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Configuration" icon="gear" href="/guides/configuration">
+    Optimize batch size and rate limiting for your use case
+  </Card>
+  <Card title="Criteria customization" icon="sliders" href="/guides/criteria-customization">
+    Fine-tune analysis criteria for better results
+  </Card>
+</CardGroup>

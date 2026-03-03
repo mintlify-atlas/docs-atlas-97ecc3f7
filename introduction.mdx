@@ -1,0 +1,168 @@
+---
+title: Tweet Audit Tool
+description: Analyze your X (Twitter) archive with AI and identify tweets for deletion based on customizable criteria
+---
+
+<img
+  className="block dark:hidden"
+  src="/images/hero-light.svg"
+  alt="Tweet Audit Tool Hero Light"
+/>
+<img
+  className="hidden dark:block"
+  src="/images/hero-dark.svg"
+  alt="Tweet Audit Tool Hero Dark"
+/>
+
+## Clean up your Twitter history with AI
+
+Tweet Audit Tool is a Python-based CLI that uses Google's Gemini AI to analyze your X (Twitter) archive and identify tweets that no longer align with your professional image or personal values.
+
+Perfect for professionals who want to audit old tweets that might contain:
+- Unprofessional language or outdated opinions
+- Keywords you no longer want associated with you
+- Content that doesn't match your current values
+- Posts that could harm your professional reputation
+
+<CardGroup cols={2}>
+  <Card
+    title="Installation"
+    icon="download"
+    href="/installation"
+  >
+    Get started with prerequisites and setup instructions
+  </Card>
+  <Card
+    title="Quick start"
+    icon="rocket"
+    href="/quickstart"
+  >
+    Run your first tweet analysis in minutes
+  </Card>
+  <Card
+    title="Configuration"
+    icon="gear"
+    href="/guides/configuration"
+  >
+    Customize your deletion criteria and settings
+  </Card>
+  <Card
+    title="CLI reference"
+    icon="terminal"
+    href="/cli/overview"
+  >
+    Complete command-line interface documentation
+  </Card>
+</CardGroup>
+
+## How it works
+
+The tool follows a simple three-step process:
+
+<Steps>
+  <Step title="Extract tweets from archive">
+    The tool reads your X archive export and converts tweets to a structured CSV format for processing.
+    
+    ```bash
+    python src/main.py extract-tweets
+    ```
+  </Step>
+  
+  <Step title="Analyze with Gemini AI">
+    Each tweet is evaluated against your custom criteria using Google's Gemini AI. The AI checks for forbidden words, topics to exclude, tone requirements, and additional instructions you define.
+    
+    ```bash
+    python src/main.py analyze-tweets
+    ```
+  </Step>
+  
+  <Step title="Review and delete manually">
+    The tool generates a CSV file with URLs of flagged tweets. You review each one and manually delete what you agree with—the tool never deletes automatically.
+  </Step>
+</Steps>
+
+<Info>
+  **Safe by design**: The tool only flags tweets for review. You maintain complete control and manually delete what you choose.
+</Info>
+
+## Key features
+
+<CardGroup cols={2}>
+  <Card title="AI-powered analysis" icon="brain">
+    Uses Google Gemini AI to intelligently evaluate tweet content against your criteria
+  </Card>
+  <Card title="Customizable criteria" icon="sliders">
+    Define forbidden words, topics to exclude, tone requirements, and custom instructions
+  </Card>
+  <Card title="Safe and manual" icon="shield-check">
+    Only generates suggestions—you review and delete manually for complete control
+  </Card>
+  <Card title="Resume capability" icon="clock-rotate-left">
+    Automatic checkpointing allows you to resume analysis after interruptions
+  </Card>
+  <Card title="Rate limiting" icon="gauge">
+    Built-in rate limiting respects API quotas and prevents hitting limits
+  </Card>
+  <Card title="Batch processing" icon="layer-group">
+    Processes tweets in configurable batches for efficient analysis
+  </Card>
+</CardGroup>
+
+## What you need
+
+<CardGroup cols={3}>
+  <Card title="X archive" icon="box-archive">
+    Download your complete X (Twitter) archive (takes 24-48 hours)
+  </Card>
+  <Card title="Gemini API key" icon="key">
+    Free API key from Google AI Studio for AI analysis
+  </Card>
+  <Card title="Python 3.12+" icon="python">
+    Modern Python installation on your system
+  </Card>
+</CardGroup>
+
+<Tip>
+  The Gemini 2.5 Flash model offers 15 requests per minute and 1,500 per day for free—enough to analyze 1,000+ tweets daily.
+</Tip>
+
+## Output format
+
+After analysis, you'll receive a CSV file with flagged tweets:
+
+```csv
+tweet_url,deleted
+https://x.com/username/status/1234567890,false
+https://x.com/username/status/9876543210,false
+```
+
+Use this file to:
+1. **Review** each flagged tweet by visiting the URL
+2. **Delete manually** if you agree with the AI's assessment
+3. **Track progress** by updating the `deleted` column to `true`
+
+## Security and privacy
+
+<Check>All output files use `0o600` permissions (owner-only read/write)</Check>
+<Check>API keys loaded from `.env` file (never committed to git)</Check>
+<Check>`data/` directory is gitignored to protect your personal tweets</Check>
+<Warning>Don't commit your `config.json` if it contains sensitive criteria</Warning>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card
+    title="Install the tool"
+    icon="download"
+    href="/installation"
+  >
+    Set up prerequisites and install dependencies
+  </Card>
+  <Card
+    title="Start analyzing"
+    icon="play"
+    href="/quickstart"
+  >
+    Run your first tweet analysis
+  </Card>
+</CardGroup>

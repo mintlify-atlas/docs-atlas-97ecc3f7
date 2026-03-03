@@ -1,0 +1,600 @@
+---
+title: Component details
+description: Deep dive into each module's responsibilities, implementation patterns, and internal design
+---
+
+This guide provides detailed information about each component in the Tweet Audit Tool CLI architecture.
+
+## Models (models.py)
+
+Defines immutable data structures used throughout the application.
+
+### Tweet
+
+Represents a single tweet from the archive:
+
+```python models.py
+@dataclass(frozen=True)
+class Tweet:
+    id: str
+    content: str
+
+    def __repr__(self) -> str:
+        preview = self.content[:50] + "..." if len(self.content) > 50 else self.content
+        return f"Tweet(id={self.id!r}, content={preview!r})"
+```
+
+**Design decisions:**
+
+<Accordion title="Why frozen=True?">
+`frozen=True` makes the dataclass immutable:
+- Prevents accidental modification
+- Makes bugs obvious (crash instead of silent corruption)
+- Thread-safe by design (though we don't use threads)
+- Easier to reason about data flow
+</Accordion>
+
+<Accordion title="Why custom __repr__?">
+Truncates long tweet content for readable logging:
+```python
+print(Tweet(id="123", content="x" * 200))
+# Tweet(id='123', content='xxxx...xxx')
+```
+</Accordion>
+
+### Decision
+
+Enum representing analysis decisions:
+
+```python models.py
+class Decision(enum.StrEnum):
+    DELETE = "DELETE"
+    KEEP = "KEEP"
+```
+
+**Why `StrEnum`?**
+- Serializes cleanly to JSON/CSV without custom converters
+- Type-safe (can't accidentally use invalid string)
+- IDE autocomplete support
+
+```python
+# StrEnum automatically converts to string
+decision = Decision.DELETE
+print(decision)  # "DELETE"
+json.dumps({"decision": decision})  # {"decision": "DELETE"}
+```
+
+### AnalysisResult
+
+Represents the outcome of analyzing a single tweet:
+
+```python models.py
+@dataclass(frozen=True)
+class AnalysisResult:
+    tweet_url: str
+    decision: Decision = Decision.KEEP
+```
+
+**Why store URL instead of tweet ID?**
+- Results CSV is action-oriented (ready for deletion)
+- URLs are directly clickable in spreadsheets
+- User doesn't need to manually construct URLs
+
+### Result
+
+Wrapper for operation results with error handling:
+
+```python models.py
+@dataclass(frozen=True)
+class Result:
+    success: bool
+    count: int = 0
+    error_type: str = ""
+    error_message: str = ""
+```
+
+**Usage pattern:**
+
+```python
+# Success case
+result = Result(success=True, count=150)
+
+# Error case
+result = Result(
+    success=False,
+    error_type="file_not_found",
+    error_message="tweets.json not found"
+)
+```
+
+This allows application layer to return errors without raising exceptions, and CLI layer to handle them appropriately.
+
+## Configuration (config.py)
+
+Manages application settings with two-tier configuration system.
+
+### Settings class
+
+```python config.py
+@dataclass
+class Settings:
+    tweets_archive_path: str = "data/tweets/tweets.json"
+    transformed_tweets_path: str = "data/tweets/transformed/tweets.csv"
+    checkpoint_path: str = "data/checkpoint.txt"
+    processed_results_path: str = "data/tweets/processed/results.csv"
+    base_twitter_url: str = "https://x.com"
+    x_username: str = "iamuchihadan"
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-2.5-flash"
+    batch_size: int = 10
+    rate_limit_seconds: float = 1.0
+    criteria: Criteria = field(default_factory=Criteria)
+```
+
+### Two-tier configuration
+
+<Tabs>
+  <Tab title="Environment variables (.env)">
+    **For secrets and user-specific values:**
+    
+    ```bash .env
+    GEMINI_API_KEY=your_api_key_here
+    X_USERNAME=your_twitter_handle
+    RATE_LIMIT_SECONDS=1.0
+    ```
+    
+    - API keys (must not be committed)
+    - Usernames (vary per user)
+    - Rate limits (tuning parameters)
+  </Tab>
+  <Tab title="Config file (config.json)">
+    **For analysis criteria:**
+    
+    ```json config.json
+    {
+      "criteria": {
+        "topics_to_exclude": [
+          "Profanity or unprofessional language",
+          "Personal attacks or insults"
+        ],
+        "tone_requirements": [
+          "Professional language only"
+        ],
+        "forbidden_words": ["badword1", "badword2"],
+        "additional_instructions": "Flag any content that could harm professional reputation"
+      }
+    }
+    ```
+    
+    - Analysis criteria (content rules)
+    - Easy to share/version without exposing secrets
+    - Optional (falls back to sensible defaults)
+  </Tab>
+</Tabs>
+
+### Caching with lru_cache
+
+```python config.py
+@lru_cache(maxsize=1)
+def load_settings() -> Settings:
+    configure_logging()
+    # Load from .env and config.json
+    return Settings(...)
+
+settings: Settings = load_settings()
+```
+
+<Info>
+**Why cache with `maxsize=1`?**
+
+Settings should be loaded once and reused. The cache prevents re-parsing `.env` and `config.json` on every access. With `maxsize=1`, we cache exactly one configuration (the current one).
+</Info>
+
+### Default criteria
+
+```python config.py
+def _default_criteria() -> Criteria:
+    return Criteria(
+        forbidden_words=[],
+        topics_to_exclude=[
+            "Profanity or unprofessional language",
+            "Personal attacks or insults",
+            "Outdated political opinions",
+        ],
+        tone_requirements=[
+            "Professional language only",
+            "Respectful communication",
+        ],
+        additional_instructions="Flag any content that could harm professional reputation",
+    )
+```
+
+**Benefits:**
+- Lowers barrier to entry (users can start immediately)
+- Provides sensible defaults for professional cleanup
+- Can be customized later via `config.json`
+
+## Storage (storage.py)
+
+Handles all file I/O operations with context managers for resource safety.
+
+### JSONParser
+
+Parses Twitter archive JSON format:
+
+```python storage.py
+class JSONParser(Parser):
+    def parse(self) -> list[Tweet]:
+        with open(self.file_path, encoding=FILE_ENCODING) as file:
+            data = json.load(file)
+            return [
+                Tweet(
+                    id=item["tweet"][TWITTER_ARCHIVE_ID_FIELD],
+                    content=item["tweet"][TWITTER_ARCHIVE_TEXT_FIELD],
+                )
+                for item in data
+            ]
+```
+
+**Expected format:**
+```json
+[
+  {
+    "tweet": {
+      "id_str": "1234567890",
+      "full_text": "Tweet content here"
+    }
+  }
+]
+```
+
+<Note>
+Raises descriptive errors for missing files, invalid JSON, or missing required fields.
+</Note>
+
+### CSVParser
+
+Parses transformed tweets CSV:
+
+```python storage.py
+class CSVParser(Parser):
+    def parse(self) -> list[Tweet]:
+        with open(self.file_path, encoding=FILE_ENCODING) as file:
+            reader = csv.DictReader(file)
+            return [
+                Tweet(id=row[TWEET_CSV_ID_COLUMN], content=row[TWEET_CSV_TEXT_COLUMN])
+                for row in reader
+            ]
+```
+
+**Expected format:**
+```csv
+id,text
+1234567890,Tweet content here
+```
+
+### CSVWriter
+
+Writes tweets or results to CSV with context manager:
+
+```python storage.py
+class CSVWriter:
+    def __enter__(self) -> "CSVWriter":
+        # Create directories if needed
+        os.makedirs(dir_path, mode=PRIVATE_DIR_MODE, exist_ok=True)
+        
+        # Open file for writing
+        self.file = open(self.file_path, mode, encoding=FILE_ENCODING, newline="")
+        self.writer = csv.writer(self.file)
+        
+        # Set restrictive permissions
+        os.chmod(self.file_path, PRIVATE_FILE_MODE)
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> bool:
+        if self.file:
+            self.file.close()
+        return False
+```
+
+**Why context managers?**
+- Guarantees file closure (prevents resource leaks)
+- Automatic cleanup on exceptions
+- Explicit lifecycle management
+
+**Usage:**
+```python
+with CSVWriter(path) as writer:
+    writer.write_tweets(tweets)
+# File automatically closed, even if exception occurs
+```
+
+### File permissions
+
+```python storage.py
+PRIVATE_FILE_MODE = 0o600  # Owner read/write only
+PRIVATE_DIR_MODE = 0o750   # Owner rwx, group rx
+```
+
+<Info>
+**Security:** Your tweets are personal data. These permissions ensure only you can read them (no group/other access on shared systems).
+</Info>
+
+### Checkpoint
+
+Manages progress tracking for resume functionality:
+
+```python storage.py
+class Checkpoint:
+    def load(self) -> int:
+        """Returns 0 if file empty/missing, saved index otherwise"""
+        self.file.seek(0)
+        content = self.file.read().strip()
+        return int(content) if content else 0
+    
+    def save(self, tweet_index: int) -> None:
+        """Atomically updates checkpoint"""
+        self.file.seek(0)
+        self.file.truncate()
+        self.file.write(str(tweet_index))
+        self.file.flush()  # Force write to disk
+```
+
+**Checkpoint format:**
+```
+500
+```
+Single integer representing the next tweet index to process.
+
+**Resume behavior:**
+- Process stops at tweet 500 → checkpoint saves `500`
+- On restart → load returns `500` → skip tweets 0-499
+
+## Analyzer (analyzer.py)
+
+Handles AI integration with Gemini API, including rate limiting and retry logic.
+
+### Lazy initialization pattern
+
+```python application.py
+class Application:
+    def __init__(self):
+        self._analyzer = None  # Not created yet
+    
+    @property
+    def analyzer(self) -> Gemini:
+        if self._analyzer is None:
+            self._analyzer = Gemini()  # Create on first use
+        return self._analyzer
+```
+
+<Info>
+**Why lazy initialization?**
+
+Creating the Gemini client requires an API key. If you run `extract-tweets` (which doesn't need AI), we shouldn't validate the API key or hit Google's servers. Lazy init defers that cost until actually needed.
+</Info>
+
+### Rate limiting
+
+```python analyzer.py
+def _rate_limit(self) -> None:
+    elapsed = time.time() - self.last_request_time
+    if elapsed < self.min_request_interval:
+        time.sleep(self.min_request_interval - elapsed)
+    self.last_request_time = time.time()
+```
+
+Enforces minimum time between requests to prevent hitting API rate limits:
+
+```
+Request 1 ──(1.0s)──> Request 2 ──(1.0s)──> Request 3
+```
+
+Simple but effective - no token buckets or sliding windows needed.
+
+### Retry with exponential backoff
+
+```python analyzer.py
+@retry_with_backoff(max_retries=3, initial_delay=1.0)
+def analyze(self, tweet: Tweet) -> AnalysisResult:
+    # API call here
+```
+
+Retries transient errors with increasing delays:
+
+<Steps>
+  <Step title="Attempt 1">
+    Immediate execution
+  </Step>
+  <Step title="Attempt 2 (if needed)">
+    Wait ~1 second before retry
+  </Step>
+  <Step title="Attempt 3 (if needed)">
+    Wait ~2 seconds before retry
+  </Step>
+  <Step title="Failure">
+    Raise exception after max retries
+  </Step>
+</Steps>
+
+**Retryable errors:**
+- Timeout
+- Connection errors
+- Rate limit (429)
+- Service unavailable (503)
+- "temporarily unavailable"
+
+<Note>
+**Why exponential?** Gives the API service time to recover. If temporarily overloaded, backing off reduces load.
+</Note>
+
+### Prompt construction
+
+```python analyzer.py
+def _build_prompt(self, tweet: Tweet) -> str:
+    criteria_list = "\n".join(f"{i + 1}. {c}" for i, c in enumerate(criteria_parts))
+    
+    return f"""You are evaluating tweets for a professional's Twitter cleanup.
+
+Tweet ID: {tweet.id}
+Tweet: "{tweet.content}"
+
+Mark for deletion if it violates any of these criteria:
+{criteria_list}{additional}
+
+Respond in JSON format:
+{{
+  "decision": "DELETE" or "KEEP",
+  "reason": "brief explanation"
+}}"""
+```
+
+**Prompt engineering principles:**
+
+1. **Provides context:** What we're evaluating (professional cleanup)
+2. **Lists criteria:** Explicit numbered list from config
+3. **Demands structure:** JSON output with `decision` and `reason`
+4. **Shows examples:** Mentions "DELETE" or "KEEP" format
+
+**Why JSON response?**
+- Machine-parsable (no regex to extract decision)
+- Gemini supports `response_mime_type="application/json"`
+- Structured = easier error handling
+- Type-safe parsing
+
+## Application (application.py)
+
+The orchestrator that connects all components and implements business logic.
+
+### Extract pipeline
+
+```python application.py
+def extract_tweets(self) -> Result:
+    try:
+        # 1. Parse JSON archive
+        parser = JSONParser(settings.tweets_archive_path)
+        tweets = parser.parse()
+        
+        # 2. Write to CSV
+        with CSVWriter(settings.transformed_tweets_path) as writer:
+            writer.write_tweets(tweets)
+        
+        return Result(success=True, count=len(tweets))
+    except Exception as e:
+        return self._build_error_result(e, context="extraction")
+```
+
+**Flow:**
+```
+tweets.json → JSONParser → List[Tweet] → CSVWriter → tweets.csv
+```
+
+### Analysis pipeline
+
+```python application.py
+def analyze_tweets(self) -> Result:
+    with Checkpoint(checkpoint_path) as checkpoint:
+        start_index = checkpoint.load()
+        
+        for i in range(start_index, len(tweets), batch_size):
+            batch = tweets[i:i+batch_size]
+            
+            for tweet in batch:
+                if _is_retweet(tweet):
+                    continue
+                
+                result = self.analyzer.analyze(tweet)
+                
+                if result.decision == Decision.DELETE:
+                    writer.write_result(result)
+            
+            checkpoint.save(i + len(batch))  # Save after batch
+```
+
+**Flow:**
+```
+tweets.csv → CSVParser → List[Tweet] → Gemini AI → results.csv
+                              ↓                ↓
+                        Checkpoint ←──────────┘
+```
+
+### Batch processing
+
+Batch size (default: 10) is the **resume granularity**:
+
+- 10,000 tweets with batch_size=10 → 1,000 checkpoints
+- Interrupted at tweet 5,234 → resume at tweet 5,230 (start of batch)
+
+<Warning>
+Smaller batches = more frequent checkpoints = more I/O overhead
+Larger batches = less frequent checkpoints = more rework on failure
+
+Default of 10 balances these concerns.
+</Warning>
+
+### Retweet filtering
+
+```python application.py
+def _is_retweet(tweet) -> bool:
+    return tweet.content.startswith("RT @")
+```
+
+**Why skip retweets?**
+- Retweets aren't your original content
+- Deleting a retweet doesn't affect your original tweets
+- Focus analysis on what you actually wrote
+
+### Error mapping
+
+```python application.py
+@staticmethod
+def _build_error_result(e: Exception, context: str = "") -> Result:
+    if isinstance(e, FileNotFoundError):
+        return Result(success=False, error_type="file_not_found", ...)
+    elif isinstance(e, ValueError):
+        return Result(success=False, error_type="invalid_format", ...)
+    # ...
+```
+
+Maps Python exceptions to domain-specific error types. CLI can show user-friendly messages based on `error_type` instead of raw stack traces.
+
+## CLI (main.py)
+
+Thin interface layer that handles user interaction.
+
+```python main.py
+def main() -> None:
+    parser = argparse.ArgumentParser(...)
+    args = parser.parse_args()
+    
+    app = Application()
+    
+    if args.command == "extract-tweets":
+        result = app.extract_tweets()
+        if not result.success:
+            print(f"Error: {result.error_message}", file=sys.stderr)
+            sys.exit(1)
+        print(f"Successfully extracted {result.count} tweets")
+```
+
+**Responsibilities:**
+
+1. Parse command-line arguments
+2. Call application methods
+3. Format output for humans
+4. Exit with appropriate status code
+
+<Info>
+**Separation benefit:** Later, you could add web API (Flask/FastAPI), GUI (Tkinter/Qt), or automated pipeline (cron job) - all would reuse the `Application` class without modification.
+</Info>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Data flow" icon="arrow-right-arrow-left" href="/architecture/data-flow">
+    See how data moves between components
+  </Card>
+  <Card title="Design decisions" icon="lightbulb" href="/architecture/design-decisions">
+    Understand key trade-offs and alternatives
+  </Card>
+</CardGroup>

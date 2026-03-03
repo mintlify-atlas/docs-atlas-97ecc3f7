@@ -1,0 +1,437 @@
+---
+title: Testing criteria
+description: Learn how to test and refine your deletion criteria on small tweet samples before running full archive analysis
+---
+
+Before analyzing your entire Twitter archive, test your criteria configuration on a small sample to ensure the AI interprets your rules as intended. This prevents wasting API quota and time on poorly-tuned criteria.
+
+## Why test criteria?
+
+AI interpretation of deletion criteria is nuanced and can produce unexpected results:
+
+- **Too strict**: Flags tweets you want to keep
+- **Too lenient**: Misses tweets you want to delete
+- **Ambiguous rules**: Produces inconsistent decisions
+- **Wrong context**: Doesn't understand your professional domain
+
+<Tip>
+Testing on 10-20 tweets takes 2-3 minutes but can save hours of re-processing with refined criteria.
+</Tip>
+
+## Creating a test sample
+
+Extract a small subset of tweets that represent the diversity of your archive.
+
+<Steps>
+
+<Step title="Run initial extraction">
+First, extract your full archive to CSV:
+```bash
+python src/main.py extract-tweets
+```
+This creates `data/tweets/transformed/tweets.csv`
+</Step>
+
+<Step title="Create test subset">
+Select 10-20 diverse tweets covering:
+- Different time periods (old and recent)
+- Various topics you've tweeted about
+- Different tones (professional, casual, humorous)
+- Edge cases you're unsure about
+
+```bash
+# Copy first 20 tweets to test file
+head -n 21 data/tweets/transformed/tweets.csv > data/tweets/transformed/test_tweets.csv
+
+# Or manually curate specific tweet IDs
+head -n 1 data/tweets/transformed/tweets.csv > data/tweets/transformed/test_tweets.csv
+grep -E "(1234567890|9876543210|1111111111)" data/tweets/transformed/tweets.csv >> data/tweets/transformed/test_tweets.csv
+```
+</Step>
+
+<Step title="Update configuration temporarily">
+Edit `src/config.py` to use the test file:
+```python src/config.py
+@dataclass
+class Settings:
+    transformed_tweets_path: str = "data/tweets/transformed/test_tweets.csv"  # Temporarily use test file
+    # ... other settings
+```
+</Step>
+
+</Steps>
+
+## Testing workflow
+
+Iteratively test and refine your criteria until results match your expectations.
+
+### Initial test run
+
+<Steps>
+
+<Step title="Configure baseline criteria">
+Start with conservative criteria in `config.json`:
+```json config.json
+{
+  "criteria": {
+    "forbidden_words": ["damn", "wtf"],
+    "topics_to_exclude": [
+      "Profanity or unprofessional language"
+    ],
+    "tone_requirements": [
+      "Professional language only"
+    ],
+    "additional_instructions": "Flag content inappropriate for professional profile"
+  }
+}
+```
+</Step>
+
+<Step title="Run analysis on test sample">
+```bash
+python src/main.py analyze-tweets
+```
+This should complete in 1-2 minutes for 10-20 tweets.
+</Step>
+
+<Step title="Review results">
+Open `data/tweets/processed/results.csv` and manually check each flagged tweet:
+```csv
+tweet_url,deleted
+https://x.com/username/status/1234567890,false
+https://x.com/username/status/9876543210,false
+```
+
+For each URL:
+1. Visit the tweet
+2. Read the content
+3. Decide: Should this actually be deleted?
+</Step>
+
+</Steps>
+
+### Refinement iteration
+
+<Steps>
+
+<Step title="Identify misclassifications">
+Categorize errors:
+- **False positives**: Flagged but should keep
+- **False negatives**: Not flagged but should delete
+- **Correct decisions**: Properly classified
+
+Track patterns:
+```
+False positives:
+- Tweet 1234567890: Casual tone but professional content
+- Tweet 1111111111: Contains "damn" but in a quote
+
+False negatives:
+- Tweet 9999999999: Outdated political opinion not caught
+- Tweet 8888888888: Sarcastic tone missed
+```
+</Step>
+
+<Step title="Adjust criteria">
+Modify `config.json` based on patterns:
+
+```json config.json
+{
+  "criteria": {
+    "forbidden_words": ["damn", "wtf", "crypto"],  // Added "crypto"
+    "topics_to_exclude": [
+      "Profanity or unprofessional language",
+      "Outdated political opinions from 2020-2022"  // More specific
+    ],
+    "tone_requirements": [
+      "Professional language only",
+      "No sarcasm or cynical humor"  // Address false negative
+    ],
+    "additional_instructions": "Flag content inappropriate for professional profile. Ignore casual tone if content is substantive. Be strict on political content."
+  }
+}
+```
+</Step>
+
+<Step title="Reset and re-test">
+```bash
+# Clear previous test results
+rm data/checkpoint.txt
+rm data/tweets/processed/results.csv
+
+# Run analysis again with refined criteria
+python src/main.py analyze-tweets
+```
+</Step>
+
+<Step title="Repeat until satisfied">
+Continue refining until you achieve acceptable accuracy on your test sample. Aim for:
+- **< 10% false positives**: Very few good tweets flagged
+- **< 10% false negatives**: Very few bad tweets missed
+</Step>
+
+</Steps>
+
+<Note>
+You'll never achieve 100% accuracy with AI classification. The goal is "good enough" - when false positives/negatives are rare and tolerable.
+</Note>
+
+## Criteria patterns and examples
+
+### Pattern: Too broad
+
+**Problem**: Rule catches more than intended
+
+```json
+// Too broad
+"topics_to_exclude": ["Politics"]
+// Flags ALL political content, including neutral policy discussions
+
+// Better
+"topics_to_exclude": ["Partisan political opinions and endorsements"]
+// Flags only opinionated political content
+```
+
+### Pattern: Too vague
+
+**Problem**: AI interprets rule differently than you intended
+
+```json
+// Too vague
+"tone_requirements": ["Be nice"]
+// Unclear what "nice" means
+
+// Better
+"tone_requirements": [
+  "No personal attacks",
+  "No mocking or belittling others",
+  "Respectful disagreement only"
+]
+// Specific, actionable criteria
+```
+
+### Pattern: Conflicting rules
+
+**Problem**: Rules contradict each other
+
+```json
+// Conflicting
+"topics_to_exclude": ["Technical jargon"],
+"additional_instructions": "Keep tweets about software engineering"
+// Confused: software engineering requires technical jargon
+
+// Better
+"topics_to_exclude": ["Excessive unexplained acronyms"],
+"additional_instructions": "Keep tweets about software engineering. Technical terms are fine if used professionally."
+```
+
+### Pattern: Missing context
+
+**Problem**: AI doesn't understand your domain
+
+```json
+// Missing context
+"forbidden_words": ["kill"]
+// Flags "kill the bug" in software context
+
+// Better
+"forbidden_words": ["kill"],
+"additional_instructions": "Ignore software development terminology like 'kill the process' or 'kill the bug'"
+```
+
+## Advanced testing techniques
+
+### Stratified sampling
+
+Ensure your test sample covers all important categories:
+
+```bash
+# Extract tweets from different years
+grep "^[^,]*,2018" data/tweets/transformed/tweets.csv | head -n 5 > test_tweets.csv
+grep "^[^,]*,2020" data/tweets/transformed/tweets.csv | head -n 5 >> test_tweets.csv
+grep "^[^,]*,2024" data/tweets/transformed/tweets.csv | head -n 5 >> test_tweets.csv
+```
+
+### Edge case focus
+
+Manually curate tweets you're uncertain about:
+
+1. Search your archive for borderline content
+2. Extract those specific tweet IDs to test file
+3. Test criteria specifically on these edge cases
+4. Refine rules to handle them correctly
+
+<Info>
+Edge cases often reveal the real quality of your criteria. A rule that works on obvious examples but fails on nuanced content needs refinement.
+</Info>
+
+### A/B testing criteria
+
+Compare two different criteria configurations:
+
+```bash
+# Test configuration A
+cp config_strict.json config.json
+python src/main.py analyze-tweets
+mv data/tweets/processed/results.csv results_strict.csv
+
+# Test configuration B
+cp config_lenient.json config.json
+rm data/checkpoint.txt
+python src/main.py analyze-tweets
+mv data/tweets/processed/results.csv results_lenient.csv
+
+# Compare results
+diff results_strict.csv results_lenient.csv
+```
+
+Choose the configuration with better accuracy on your test sample.
+
+## Interpreting AI decisions
+
+The Gemini model returns both a decision (`DELETE` or `KEEP`) and a reason. Enable debug logging to see reasons:
+
+```bash
+export LOG_LEVEL=DEBUG
+python src/main.py analyze-tweets
+```
+
+<Warning>
+The current implementation doesn't expose the `reason` field from Gemini's response. To see reasons during testing, temporarily modify `src/analyzer.py` to log them:
+
+```python src/analyzer.py
+try:
+    data = json.loads(response.text)
+    decision = Decision(data["decision"].upper())
+    reason = data.get("reason", "No reason provided")
+    logger.debug(f"Tweet {tweet.id}: {decision.value} - {reason}")  # Add this line
+except ...
+```
+</Warning>
+
+### Common AI interpretation patterns
+
+| Your rule | AI often interprets as | Example |
+|-----------|----------------------|----------|
+| "Profanity" | Explicit curse words only | Flags: "damn", "hell"<br/>Misses: "crap", "sucks" |
+| "Unprofessional" | Casual/informal tone | Flags: "lol", "gonna"<br/>Misses: Sarcasm |
+| "Political" | Partisan opinions | Flags: "Vote for X"<br/>Misses: Neutral policy |
+| "Offensive" | Explicit insults | Flags: "you're an idiot"<br/>Misses: Subtle mockery |
+
+<Tip>
+If the AI consistently misinterprets a rule, make it more explicit in `additional_instructions` with specific examples of what should/shouldn't be flagged.
+</Tip>
+
+## Validation metrics
+
+Track metrics across test iterations to measure improvement:
+
+```
+Iteration 1:
+- Test sample: 20 tweets
+- Flagged: 8 tweets
+- False positives: 3 (37.5%)
+- False negatives: 2 (10% of 20)
+- Accuracy: 75%
+
+Iteration 2 (refined criteria):
+- Test sample: 20 tweets  
+- Flagged: 6 tweets
+- False positives: 1 (16.7%)
+- False negatives: 1 (5% of 20)
+- Accuracy: 90%
+```
+
+Accuracy formula:
+```
+Accuracy = (Correct decisions) / (Total tweets) * 100
+         = (20 - 1 false positive - 1 false negative) / 20 * 100
+         = 90%
+```
+
+## When to stop testing
+
+You're ready for full archive analysis when:
+
+1. **False positive rate < 10%**: Rarely flags good tweets
+2. **False negative rate < 10%**: Rarely misses bad tweets
+3. **Consistent across samples**: Test on multiple samples with similar accuracy
+4. **Edge cases handled**: Known borderline tweets classified correctly
+5. **You trust the pattern**: Understand why each decision was made
+
+<Note>
+Perfection is impossible with AI. Accept that you'll manually review flagged tweets anyway, so 90% accuracy is often sufficient.
+</Note>
+
+## Full archive analysis preparation
+
+<Steps>
+
+<Step title="Restore full dataset">
+Revert `src/config.py` to use the full CSV:
+```python src/config.py
+transformed_tweets_path: str = "data/tweets/transformed/tweets.csv"
+```
+</Step>
+
+<Step title="Clear test artifacts">
+```bash
+rm data/checkpoint.txt
+rm data/tweets/processed/results.csv
+rm data/tweets/transformed/test_tweets.csv
+```
+</Step>
+
+<Step title="Finalize criteria">
+Save your tested `config.json` configuration
+</Step>
+
+<Step title="Run full analysis">
+```bash
+python src/main.py analyze-tweets
+```
+Now with confidence in your criteria!
+</Step>
+
+</Steps>
+
+## Best practices
+
+1. **Always test first**: Never run full analysis without testing criteria
+2. **Use real tweets**: Don't test on synthetic examples - use actual archive tweets
+3. **Document reasoning**: Keep notes on why you adjusted each rule
+4. **Test incrementally**: Make one change at a time to understand its impact
+5. **Expect manual review**: Plan to manually check flagged tweets anyway
+6. **Update over time**: If results on full archive differ from test, refine and re-run
+
+## Troubleshooting
+
+### All tweets flagged as DELETE
+
+**Cause**: Criteria too strict
+
+**Solution**: Relax rules, add context to `additional_instructions`:
+```json
+"additional_instructions": "Only flag clearly problematic content. When in doubt, choose KEEP."
+```
+
+### No tweets flagged
+
+**Cause**: Criteria too lenient
+
+**Solution**: Add more specific rules, include `forbidden_words` list
+
+### Inconsistent results
+
+**Cause**: Ambiguous or conflicting criteria
+
+**Solution**: Rewrite rules to be more specific and unambiguous. Remove conflicting instructions.
+
+### Results don't match expectations
+
+**Cause**: AI interprets rules differently than you intended
+
+**Solution**: Add explicit examples to `additional_instructions`:
+```json
+"additional_instructions": "Flag tweets like 'I hate [topic]' but keep tweets like 'I disagree with [topic] because [reason]'"
+```

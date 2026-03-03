@@ -1,0 +1,421 @@
+---
+title: Batch processing
+description: Learn how the Tweet Audit Tool processes tweets in batches with automatic checkpointing for reliable resume capability
+---
+
+The Tweet Audit Tool processes tweets in configurable batches to balance performance with recoverability. Understanding batch processing helps you optimize analysis speed and handle interruptions gracefully.
+
+## How batch processing works
+
+Tweets are processed in sequential batches from your CSV file. After each batch completes, progress is saved to a checkpoint file.
+
+```python src/application.py
+for i in range(start_index, len(tweets), settings.batch_size):
+    batch = tweets[i : i + settings.batch_size]
+    batch_num = (i // settings.batch_size) + 1
+    total_batches = (len(tweets) + settings.batch_size - 1) // settings.batch_size
+    
+    logger.info(
+        f"Processing batch {batch_num}/{total_batches} "
+        f"(tweets {i + 1}-{min(i + len(batch), len(tweets))} of {len(tweets)})"
+    )
+    
+    for tweet in batch:
+        # ... process each tweet
+    
+    checkpoint.save(i + len(batch))
+    logger.info(f"Checkpoint saved at index {i + len(batch)}")
+```
+
+### Batch lifecycle
+
+<Steps>
+
+<Step title="Load checkpoint">
+On startup, read `data/checkpoint.txt` to find the resume point
+```python
+start_index = checkpoint.load()  # Returns 0 if no checkpoint exists
+```
+</Step>
+
+<Step title="Create batch slice">
+Extract the next `batch_size` tweets starting from `start_index`
+```python
+batch = tweets[i : i + settings.batch_size]
+```
+</Step>
+
+<Step title="Process tweets sequentially">
+Analyze each tweet in the batch, skipping retweets
+```python
+for tweet in batch:
+    if _is_retweet(tweet):
+        continue
+    result = self.analyzer.analyze(tweet)
+```
+</Step>
+
+<Step title="Write results">
+Append flagged tweets to `results.csv` as they're analyzed
+```python
+if result.decision == Decision.DELETE:
+    writer.write_result(result)
+```
+</Step>
+
+<Step title="Save checkpoint">
+After the entire batch completes, save progress
+```python
+checkpoint.save(i + len(batch))
+```
+</Step>
+
+<Step title="Repeat">
+Move to the next batch until all tweets are processed
+</Step>
+
+</Steps>
+
+## Configuration
+
+### Default batch size
+
+The default batch size is **10 tweets per batch**, configured in `src/config.py`:
+
+```python src/config.py
+@dataclass
+class Settings:
+    # ... other settings
+    batch_size: int = 10
+```
+
+### Changing batch size
+
+To modify the batch size, edit `src/config.py`:
+
+```python src/config.py
+batch_size: int = 50  # Process 50 tweets per batch
+```
+
+<Warning>
+Changing `batch_size` during an active analysis can cause unexpected resume behavior. Always complete or reset your analysis before changing this value.
+</Warning>
+
+## Checkpointing system
+
+Checkpoints enable reliable resume after interruptions from crashes, Ctrl+C, or API quota exhaustion.
+
+### Checkpoint file format
+
+The checkpoint file (`data/checkpoint.txt`) stores a single integer: the index of the next tweet to process.
+
+```
+# data/checkpoint.txt
+50
+```
+
+This means tweets 0-49 have been processed, and processing will resume at index 50.
+
+### Checkpoint timing
+
+<Info>
+Checkpoints are saved **after each complete batch**, not after each tweet. This means if you interrupt processing mid-batch, the entire batch will be re-processed on resume.
+</Info>
+
+```python src/application.py
+for i in range(start_index, len(tweets), settings.batch_size):
+    batch = tweets[i : i + settings.batch_size]
+    
+    # Process all tweets in batch
+    for tweet in batch:
+        result = self.analyzer.analyze(tweet)
+        # ...
+    
+    # Only save checkpoint after entire batch completes
+    checkpoint.save(i + len(batch))
+```
+
+### Resume behavior
+
+When you restart analysis, the tool automatically resumes from the saved checkpoint:
+
+```bash
+# First run (interrupted after batch 2)
+$ python src/main.py analyze-tweets
+Processing batch 1/100 (tweets 1-10 of 1000)
+Checkpoint saved at index 10
+Processing batch 2/100 (tweets 11-20 of 1000)
+Checkpoint saved at index 20
+Processing batch 3/100 (tweets 21-30 of 1000)
+^C  # User interrupts
+
+# Second run (resumes from batch 3)
+$ python src/main.py analyze-tweets
+Resuming from tweet index 20  # Last completed checkpoint
+Processing batch 3/100 (tweets 21-30 of 1000)
+```
+
+<Note>
+Retweets are skipped during processing but still count toward batch size and checkpoint indices. This is by design to maintain consistent indexing.
+</Note>
+
+## Choosing optimal batch size
+
+Batch size affects three key factors:
+
+| Factor | Small Batches (1-10) | Medium Batches (10-50) | Large Batches (50-100+) |
+|--------|---------------------|------------------------|------------------------|
+| **Checkpoint frequency** | Very frequent | Moderate | Infrequent |
+| **Resume precision** | Minimal re-work | Some re-work | Significant re-work |
+| **Processing overhead** | Higher (more I/O) | Balanced | Lower (less I/O) |
+| **Memory usage** | Minimal | Low | Higher |
+
+### Recommendation by archive size
+
+<Tip>
+**Small archives (< 1,000 tweets)**: Use `batch_size=10` (default)
+- Fast overall processing
+- Checkpoint overhead is negligible
+</Tip>
+
+<Tip>
+**Medium archives (1,000-5,000 tweets)**: Use `batch_size=25`
+- Good balance of speed and recoverability
+- ~5 minutes of re-work if interrupted
+</Tip>
+
+<Tip>
+**Large archives (5,000+ tweets)**: Use `batch_size=50`
+- Reduces checkpoint file I/O overhead
+- Accept ~10 minutes of re-work on interruption
+- Critical for multi-day processing with quota limits
+</Tip>
+
+## Error handling
+
+Batch processing stops immediately if any tweet fails analysis.
+
+```python src/application.py
+for tweet in batch:
+    if _is_retweet(tweet):
+        continue
+    
+    try:
+        result = self.analyzer.analyze(tweet)
+        # ...
+    except Exception as e:
+        logger.error(
+            f"Failed to analyze tweet {tweet.id}: {e}", exc_info=True
+        )
+        return Result(
+            success=False,
+            count=analyzed_count,
+            error_type="analysis_failed",
+            error_message=str(e),
+        )
+```
+
+<Warning>
+If analysis fails mid-batch, the checkpoint is **not saved**. The entire batch will be re-processed when you resume.
+</Warning>
+
+### Recovery from errors
+
+<Steps>
+
+<Step title="Identify the error">
+Check logs to understand why analysis failed:
+```bash
+tail -n 50 logs/analysis.log
+```
+</Step>
+
+<Step title="Fix the issue">
+Common fixes:
+- Check internet connection
+- Verify API key in `.env`
+- Increase `RATE_LIMIT_SECONDS` if hitting quota
+- Check for malformed tweets in CSV
+</Step>
+
+<Step title="Resume analysis">
+```bash
+python src/main.py analyze-tweets
+```
+Processing resumes from the last successful checkpoint
+</Step>
+
+</Steps>
+
+## Retweet handling
+
+Retweets (starting with "RT @") are automatically skipped but still affect batch indexing.
+
+```python src/application.py
+def _is_retweet(tweet) -> bool:
+    return tweet.content.startswith("RT @")
+
+# In processing loop:
+for tweet in batch:
+    if _is_retweet(tweet):
+        continue  # Skip but don't decrement batch count
+```
+
+### Why skip retweets?
+
+- **Not your content**: Retweets are others' words, not yours
+- **Bulk deletion**: Most users delete all retweets at once via Twitter's UI
+- **API efficiency**: Saves API quota for analyzing your original tweets
+
+<Info>
+If you want to analyze retweets, remove the `_is_retweet()` check in `src/application.py:95-96`. Be aware this increases API costs and processing time.
+</Info>
+
+## Result writing
+
+Results are written incrementally using append mode, not in batches.
+
+```python src/application.py
+with CSVWriter(settings.processed_results_path, append=True) as writer:
+    for i in range(start_index, len(tweets), settings.batch_size):
+        batch = tweets[i : i + settings.batch_size]
+        
+        for tweet in batch:
+            # ...
+            if result.decision == Decision.DELETE:
+                writer.write_result(result)  # Written immediately
+```
+
+### File append behavior
+
+- **First run**: Creates `data/tweets/processed/results.csv` with headers
+- **Resume runs**: Appends new results without duplicating headers
+- **Crash recovery**: Already-written results are preserved
+
+<Note>
+Even if analysis crashes mid-batch, any tweets flagged as DELETE before the crash are already saved in `results.csv`. Only unprocessed tweets in the batch need re-analysis.
+</Note>
+
+## Manual checkpoint management
+
+### Resetting progress
+
+To start analysis from scratch:
+
+```bash
+rm data/checkpoint.txt
+rm data/tweets/processed/results.csv
+python src/main.py analyze-tweets
+```
+
+### Skipping to specific position
+
+To resume from a specific tweet index:
+
+```bash
+echo "500" > data/checkpoint.txt
+python src/main.py analyze-tweets
+```
+
+This starts processing at tweet 500, skipping tweets 0-499.
+
+<Warning>
+Manually editing checkpoints can cause duplicate results in `results.csv` if you resume before an already-processed index. Only do this if you've also deleted the corresponding results.
+</Warning>
+
+## Performance optimization
+
+### I/O overhead
+
+Each checkpoint write involves:
+1. Opening `data/checkpoint.txt`
+2. Writing new index
+3. Closing file
+
+For large archives, this overhead becomes significant:
+
+```
+10,000 tweets / batch_size=10 = 1,000 checkpoint writes
+10,000 tweets / batch_size=50 = 200 checkpoint writes
+```
+
+<Tip>
+Increasing batch size from 10 to 50 reduces checkpoint I/O by 80% for large archives.
+</Tip>
+
+### Progress visibility
+
+Smaller batches provide more granular progress logging:
+
+```
+# batch_size=10
+Processing batch 1/1000 (tweets 1-10 of 10000)
+Processing batch 2/1000 (tweets 11-20 of 10000)
+# Updates every ~10 seconds
+
+# batch_size=100
+Processing batch 1/100 (tweets 1-100 of 10000)
+Processing batch 2/100 (tweets 101-200 of 10000)
+# Updates every ~100 seconds
+```
+
+Choose based on your preference for feedback frequency vs. I/O efficiency.
+
+## Monitoring progress
+
+Track analysis progress in real-time:
+
+```bash
+# Watch checkpoint file
+watch -n 5 cat data/checkpoint.txt
+
+# Count processed results
+wc -l data/tweets/processed/results.csv
+
+# Calculate progress percentage
+python -c "print(f'{int(open('data/checkpoint.txt').read()) / 10000 * 100:.1f}%')"
+```
+
+## Best practices
+
+1. **Use default batch size** (10) unless you have a specific reason to change it
+2. **Increase batch size** for archives > 5,000 tweets to reduce I/O overhead
+3. **Never edit** `checkpoint.txt` or `results.csv` while analysis is running
+4. **Back up checkpoint** before manual edits: `cp data/checkpoint.txt data/checkpoint.txt.bak`
+5. **Monitor logs** to understand batch processing patterns and timing
+6. **Plan for interruptions** by choosing a batch size that balances speed with acceptable re-work time
+
+## Troubleshooting
+
+### Duplicate results in CSV
+
+**Symptom**: Same tweet URL appears multiple times in `results.csv`
+
+**Cause**: Manually reset checkpoint without deleting results file
+
+**Solution**:
+```bash
+rm data/tweets/processed/results.csv
+rm data/checkpoint.txt
+python src/main.py analyze-tweets
+```
+
+### Analysis seems stuck
+
+**Symptom**: No log output for several minutes
+
+**Cause**: Large batch size with slow API responses
+
+**Solution**: Wait for batch to complete. Checkpoints only save after full batch. Press Ctrl+C to interrupt, then resume.
+
+### Checkpoint not saving
+
+**Symptom**: After resume, processing starts from 0 instead of last position
+
+**Cause**: Write permissions issue on `data/checkpoint.txt`
+
+**Solution**:
+```bash
+chmod 600 data/checkpoint.txt
+ls -la data/checkpoint.txt  # Verify permissions
+```
