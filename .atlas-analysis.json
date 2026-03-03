@@ -1,0 +1,114 @@
+{
+  "projectType": "cli-tool",
+  "projectName": "Tweet Audit Tool",
+  "projectDescription": "A Python CLI tool that analyzes Twitter/X archives using Google's Gemini AI to identify tweets for deletion based on customizable criteria",
+  "theme": "almond",
+  "primaryColor": "#1DA1F2",
+  "lightColor": "#AAB8C2",
+  "darkColor": "#14171A",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/configuration",
+              "guides/extracting-tweets",
+              "guides/analyzing-tweets",
+              "guides/criteria-customization",
+              "guides/resume-interrupted-analysis"
+            ]
+          },
+          {
+            "group": "Advanced",
+            "pages": [
+              "advanced/rate-limiting",
+              "advanced/batch-processing",
+              "advanced/testing-criteria"
+            ]
+          },
+          {
+            "group": "Support",
+            "pages": [
+              "troubleshooting",
+              "faq"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "CLI Reference",
+        "groups": [
+          {
+            "group": "Commands",
+            "pages": [
+              "cli/overview",
+              "cli/extract-tweets",
+              "cli/analyze-tweets"
+            ]
+          },
+          {
+            "group": "Examples",
+            "pages": [
+              "examples/basic-workflow",
+              "examples/custom-criteria",
+              "examples/large-archives"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Architecture",
+        "groups": [
+          {
+            "group": "Technical Documentation",
+            "pages": [
+              "architecture/overview",
+              "architecture/components",
+              "architecture/data-flow",
+              "architecture/design-decisions"
+            ]
+          },
+          {
+            "group": "Development",
+            "pages": [
+              "development/setup",
+              "development/testing",
+              "development/contributing"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "AI-powered tweet analysis using Google Gemini",
+    "Customizable criteria for tweet evaluation",
+    "Checkpoint-based resume capability for interrupted analysis",
+    "Rate limiting and retry logic for API reliability",
+    "CSV output for easy review and tracking",
+    "Professional defaults with optional configuration"
+  ],
+  "publicApiSurface": [
+    "python src/main.py extract-tweets",
+    "python src/main.py analyze-tweets",
+    "Application.extract_tweets()",
+    "Application.analyze_tweets()",
+    "Gemini.analyze(tweet: Tweet)",
+    "JSONParser.parse()",
+    "CSVWriter.write_tweets(tweets)",
+    "CSVWriter.write_result(result)",
+    "Checkpoint.load()",
+    "Checkpoint.save(index)"
+  ]
+}
